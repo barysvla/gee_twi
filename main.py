@@ -13,7 +13,7 @@ from scripts.fill_depressions import priority_flood_fill
 from scripts.resolve_flats import resolve_flats_barnes_tie
 
 from scripts.flow_direction_quinn_1991 import compute_flow_direction_quinn_1991
-from scripts.flow_direction_sfd_inf import compute_flow_direction_sfd_inf
+from scripts.flow_direction_sfd_inf import compute_flow_direction_sfd_infinity
 from scripts.flow_direction_md_inf import compute_flow_direction_md_infinity
 from scripts.flow_direction_qin_2007 import compute_flow_direction_qin_2007
 
@@ -127,13 +127,13 @@ def run_pipeline(
     print("✅ Flats resolved.")
 
     # --- Flow direction (on buffered grid) ---
-    if flow_method == "sfd_inf":
-        flow_direction = compute_flow_direction_sfd_inf(
-            dem_resolved, transform, nodata_mask=nodata_mask
-        )
-    elif flow_method == "quinn_1991":
+    if flow_method == "quinn_1991":
         flow_direction = compute_flow_direction_quinn_1991(
             dem_resolved, transform, p=1.0, nodata_mask=nodata_mask
+        )
+    elif flow_method == "sfd_inf":
+        flow_direction = compute_flow_direction_sfd_infinity(
+            dem_resolved, transform, nodata_mask=nodata_mask
         )
     elif flow_method == "md_infinity":
         flow_direction = compute_flow_direction_md_infinity(
