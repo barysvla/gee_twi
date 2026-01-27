@@ -36,14 +36,9 @@ def meters_per_degree_lat_lon(lat_deg: np.ndarray | float) -> tuple[np.ndarray, 
     return m_per_deg_lat, m_per_deg_lon
 
 
-def step_lengths_for_rows(transform, height: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+def step_lengths_for_rows_epsg4326(transform, height: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """
     Compute per-row step lengths between pixel centers for a north-up grid in EPSG:4326.
-
-    Notes
-    -----
-    This is only meaningful when the grid is in geographic coordinates (degrees).
-    For projected CRS (meters), you should instead use constant step lengths derived from transform.
 
     Parameters
     ----------
@@ -61,15 +56,12 @@ def step_lengths_for_rows(transform, height: int) -> tuple[np.ndarray, np.ndarra
     d_diag : np.ndarray
         Diagonal step length (meters) per row.
     """
-    # Pixel sizes in degrees (north-up assumed: a>0, e<0)
     deg_x = float(abs(transform.a))
     deg_y = float(abs(transform.e))
 
-    # Latitude of the top-left corner and per-row step (negative for north-up)
     lat_origin = float(transform.f)
-    lat_step = float(transform.e)
+    lat_step = float(transform.e)  # negative for north-up
 
-    # Row center latitudes (degrees)
     lat_centers_deg = lat_origin + lat_step * (np.arange(height, dtype=np.float64) + 0.5)
 
     mlat, mlon = meters_per_degree_lat_lon(lat_centers_deg)
@@ -81,10 +73,19 @@ def step_lengths_for_rows(transform, height: int) -> tuple[np.ndarray, np.ndarra
 
 
 # D8 neighbor offsets in order: NE, E, SE, S, SW, W, NW, N
-D8_OFFSETS = [
-    (-1,  1), (0,  1), (1,  1), (1,  0),
-    ( 1, -1), (0, -1), (-1, -1), (-1,  0),
-]
+D8_OFFSETS = np.array(
+    [
+        (-1,  1),  # NE
+        ( 0,  1),  # E
+        ( 1,  1),  # SE
+        ( 1,  0),  # S
+        ( 1, -1),  # SW
+        ( 0, -1),  # W
+        (-1, -1),  # NW
+        (-1,  0),  # N
+    ],
+    dtype=np.int32,
+)
 
 
 def compute_flow_direction_quinn_1991(
@@ -93,6 +94,8 @@ def compute_flow_direction_quinn_1991(
     *,
     p: float = 1.0,
     nodata_mask: np.ndarray | None = None,
+    assume_epsg4326: bool = True,
+    min_slope: float = 0.0,
 ) -> np.ndarray:
     """
     Multi-flow direction (MFD) routing after Quinn et al. (1991) in an FD8-style neighborhood.
@@ -102,7 +105,7 @@ def compute_flow_direction_quinn_1991(
     where:
         - tan(beta_k) = (z_center - z_neighbor) / d_k
         - d_k is the planimetric distance between cell centers
-        - L_k is an effective contour-length factor (Quinn 1991 FD8 constants)
+        - L_k is an effective contour-length factor (FD8 constants)
         - p=1 corresponds to Quinn (1991); p>1 is a Holmgren-style generalization.
 
     Parameters
@@ -110,11 +113,17 @@ def compute_flow_direction_quinn_1991(
     dem : np.ndarray
         2D DEM array. NoData should be NaN (recommended).
     transform : rasterio.Affine-like
-        Affine transform (north-up). Used to derive step lengths in meters for EPSG:4326 grids.
+        Affine transform (north-up).
+        If assume_epsg4326=True, transform is assumed to be in degrees and per-row metric step lengths are computed.
+        If assume_epsg4326=False, transform is assumed to be in projected units (meters), and constant step lengths are used.
     p : float, default=1.0
         Exponent controlling flow dispersion across downslope neighbors.
     nodata_mask : np.ndarray | None
         Boolean mask (True = invalid). If None, derived as ~isfinite(dem).
+    assume_epsg4326 : bool, default=True
+        Whether transform is EPSG:4326-like (degrees). If False, treat transform units as meters.
+    min_slope : float, default=0.0
+        Optional threshold on tan(beta). Slopes <= min_slope are ignored.
 
     Returns
     -------
@@ -130,14 +139,19 @@ def compute_flow_direction_quinn_1991(
     else:
         nodata_mask = np.asarray(nodata_mask, dtype=bool)
 
-    # Per-row step lengths (meters) for geographic CRS (EPSG:4326).
-    # If you later support projected CRS, replace this with constant dx/dy from transform.
-    dx_row, dy_row, d_diag_row = step_lengths_for_rows(transform, height)
+    # Step lengths (meters)
+    if assume_epsg4326:
+        dx_row, dy_row, d_diag_row = step_lengths_for_rows_epsg4326(transform, height)
+    else:
+        dx = float(abs(transform.a))
+        dy = float(abs(transform.e))
+        dx_row = np.full(height, dx, dtype=np.float64)
+        dy_row = np.full(height, dy, dtype=np.float64)
+        d_diag_row = np.full(height, float(np.hypot(dx, dy)), dtype=np.float64)
 
-    # Effective contour-length factors (Quinn 1991 / FD8 constants)
+    # Effective contour-length factors (FD8 constants)
     L_cardinal = 0.5
     L_diagonal = np.sqrt(2.0) / 4.0
-    # Map to D8 order: NE(diag), E(card), SE(diag), S(card), SW(diag), W(card), NW(diag), N(card)
     L = np.array(
         [L_diagonal, L_cardinal, L_diagonal, L_cardinal, L_diagonal, L_cardinal, L_diagonal, L_cardinal],
         dtype=np.float64,
@@ -145,8 +159,8 @@ def compute_flow_direction_quinn_1991(
 
     flow_weights = np.zeros((height, width, 8), dtype=np.float32)
 
+    # Main loop
     for i in range(height):
-        # Step lengths to D8 neighbors in this row (meters)
         step_len = np.array(
             [d_diag_row[i], dx_row[i], d_diag_row[i], dy_row[i],
              d_diag_row[i], dx_row[i], d_diag_row[i], dy_row[i]],
@@ -158,40 +172,38 @@ def compute_flow_direction_quinn_1991(
                 continue
 
             zc = z[i, j]
-            weights = []
-            indices = []
+            w = np.zeros(8, dtype=np.float64)
 
-            for k, (di, dj) in enumerate(D8_OFFSETS):
-                ni, nj = i + di, j + dj
+            with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+                for k in range(8):
+                    di, dj = int(D8_OFFSETS[k, 0]), int(D8_OFFSETS[k, 1])
+                    ni, nj = i + di, j + dj
 
-                # Bounds + NoData check
-                if not (0 <= ni < height and 0 <= nj < width):
-                    continue
-                if nodata_mask[ni, nj]:
-                    continue
+                    if not (0 <= ni < height and 0 <= nj < width):
+                        continue
+                    if nodata_mask[ni, nj]:
+                        continue
 
-                d = float(step_len[k])
-                if d <= 0.0:
-                    continue
+                    d = float(step_len[k])
+                    if d <= 0.0:
+                        continue
 
-                dz = zc - z[ni, nj]
-                if dz <= 0.0:
-                    continue  # only positive slopes (downslope neighbors)
+                    dz = zc - z[ni, nj]
+                    if dz <= 0.0:
+                        continue
 
-                tan_beta = dz / d
-                w = L[k] * (tan_beta ** float(p))
-                if w > 0.0:
-                    weights.append(w)
-                    indices.append(k)
+                    tan_beta = dz / d
+                    if not np.isfinite(tan_beta) or tan_beta <= min_slope:
+                        continue
 
-            if not indices:
-                continue
+                    # w_k = L_k * (tan_beta)^p
+                    wk = L[k] * (tan_beta ** float(p))
+                    if np.isfinite(wk) and wk > 0.0:
+                        w[k] = wk
 
-            s = float(np.sum(weights))
+            s = float(w.sum())
             if s > 0.0:
-                inds = np.asarray(indices, dtype=int)
-                flow_weights[i, j, inds] = (np.asarray(weights, dtype=np.float64) / s).astype(np.float32)
+                flow_weights[i, j, :] = (w / s).astype(np.float32)
 
-    # Keep NoData cells as zeros explicitly
     flow_weights[nodata_mask, :] = 0.0
     return flow_weights
