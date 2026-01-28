@@ -13,15 +13,9 @@ from scripts.fill_depressions import priority_flood_fill
 from scripts.resolve_flats import resolve_flats_barnes_tie
 
 from scripts.flow_direction_quinn_1991 import compute_flow_direction_quinn_1991
-from scripts.flow_direction_sfd_inf import compute_flow_direction_sfd_infinity
-from scripts.flow_direction_md_inf import compute_flow_direction_md_infinity
 from scripts.flow_direction_qin_2007 import compute_flow_direction_qin_2007
 
-from scripts.flow_accumulation_quinn_cit import compute_flow_accumulation_quinn_cit
-from scripts.flow_accumulation_sfd_inf import compute_flow_accumulation_sfd_inf
-from scripts.flow_accumulation_quinn_1991 import compute_flow_accumulation_quinn_1991
-from scripts.flow_accumulation_md_inf import compute_flow_accumulation_md_infinity
-from scripts.flow_accumulation_qin_2007 import compute_flow_accumulation_qin_2007
+from scripts.flow_accumulation_mfd_fd8 import compute_flow_accumulation_mfd_fd8
 
 from scripts.push_to_ee import push_array_to_ee_geotiff
 from scripts.clip_tif import clip_tif_by_geojson
@@ -102,7 +96,7 @@ def run_pipeline(
     ee_dem_grid  = grid["ee_dem_grid"]           # DEM (Earth Engine grid-locked)
 
 
-    scale = ee.Number(ee_dem_grid.projection().nominalScale())
+    # scale = ee.Number(ee_dem_grid.projection().nominalScale())
     # print("nominalScale [m]:", scale.getInfo())
 
     # --- Hydrologic conditioning (client-side arrays) ---
@@ -147,30 +141,19 @@ def run_pipeline(
         raise ValueError(f"Unsupported flow_method: {flow_method}")
     print("✅ Flow direction computed.")
 
-    # --- Flow accumulation on buffered domain ---
-    # Example: Qin 2007; adjust to match selected flow_method if you have variants
-    # acc_cells = compute_flow_accumulation_qin_2007(
-    #     flow_direction, nodata_mask=nodata_mask, out="cells"
-    # )
-    acc_km2 = compute_flow_accumulation_qin_2007(
-        flow_direction, pixel_area_m2=px_area_np, nodata_mask=nodata_mask, out="km2"
+    # --- Flow accumulation (on buffered domain) ---
+    acc_km2 = compute_flow_accumulation_mfd_fd8(
+        flow_direction,
+        nodata_mask=nodata_mask,
+        pixel_area_m2=px_area_np,
+        out="km2",
+        renormalize=False,
+        cycle_check=True,
     )
     print("✅ Flow accumulation computed.")
 
     # Branch: cloud mode vs local mode
     if use_bucket:
-        # Upload arrays to EE via bucket
-        # dict_acc_cells = push_array_to_ee_geotiff(
-        #     acc_cells,
-        #     transform=transform,
-        #     crs=crs,
-        #     nodata_mask=nodata_mask,
-        #     bucket_name=f"{project_id}-ee-uploads",
-        #     project_id=project_id,
-        #     band_name="flow_accumulation_cells",
-        #     tmp_dir=grid.get("tmp_dir", None),
-        #     nodata_value=np.nan,
-        # )
         dict_acc = push_array_to_ee_geotiff(
             acc_km2,
             transform=transform,
@@ -185,11 +168,9 @@ def run_pipeline(
             # dtype="float32",
             # build_mask_from_nodata=True,
         )
-        # ee_flow_accumulation_cells_full = dict_acc_cells["image"]
         ee_flow_accumulation_full = dict_acc["image"]
 
         # Clip to original ROI
-        # ee_flow_accumulation_cells = ee_flow_accumulation_cells_full.clip(geometry)
         ee_flow_accumulation = ee_flow_accumulation_full.clip(geometry)
 
         # Slope & TWI via EE
