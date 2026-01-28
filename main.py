@@ -125,14 +125,6 @@ def run_pipeline(
         flow_direction = compute_flow_direction_quinn_1991(
             dem_resolved, transform, p=1.0, nodata_mask=nodata_mask
         )
-    elif flow_method == "sfd_inf":
-        flow_direction = compute_flow_direction_sfd_infinity(
-            dem_resolved, transform, nodata_mask=nodata_mask
-        )
-    elif flow_method == "md_infinity":
-        flow_direction = compute_flow_direction_md_infinity(
-            dem_resolved, transform, nodata_mask=nodata_mask
-        )
     elif flow_method == "qin_2007":
         flow_direction = compute_flow_direction_qin_2007(
             dem_resolved, transform, nodata_mask=nodata_mask
