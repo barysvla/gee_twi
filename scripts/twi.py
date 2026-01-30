@@ -3,14 +3,50 @@ import numpy as np
 
 def compute_twi(flow_accumulation, slope):
     """
-    Výpočet Topographic Wetness Index (TWI).
+    Compute the Topographic Wetness Index (TWI).
+
+    TWI is defined as:
+        TWI = ln(A / tan(beta))
+
+    where:
+        A     = upslope contributing area (flow accumulation)
+        beta = local terrain slope (in radians)
+
+    Parameters
+    ----------
+    flow_accumulation : ee.Image
+        Flow accumulation raster (e.g. in km² or m²).
+    slope : ee.Image
+        Terrain slope in degrees.
+
+    Returns
+    -------
+    ee.Image
+        Topographic Wetness Index (TWI).
     """
+
+    # Avoid zero slope values to prevent division by zero
+    # Cells with slope == 0 are replaced by a small threshold value
     safe_slope = slope.where(slope.eq(0), 0.1)
-    tan_slope = safe_slope.divide(180).multiply(ee.Number(3.14159265359)).tan()
-    twi = flow_accumulation.divide(tan_slope).log().rename("TWI")
-    #scaled_twi = twi.multiply(1e8).toInt().rename("TWI_scaled")
+
+    # Convert slope from degrees to radians and compute tangent
+    tan_slope = (
+        safe_slope
+        .multiply(ee.Number(3.14159265359))
+        .divide(180.0)
+        .tan()
+    )
+
+    # Compute TWI = ln(flow_accumulation / tan(slope))
+    twi = (
+        flow_accumulation
+        .divide(tan_slope)
+        .log()
+        .rename("TWI")
+    )
 
     return twi
+
 
 def compute_twi_numpy(
     acc_np: np.ndarray,
