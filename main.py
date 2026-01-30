@@ -95,7 +95,7 @@ def run_pipeline(
     ee_dem_grid  = grid["ee_dem_grid"]           # DEM (Earth Engine grid-locked)
 
 
-    # scale = ee.Number(ee_dem_grid.projection().nominalScale())
+    scale = ee.Number(ee_dem_grid.projection().nominalScale())
     # print("nominalScale [m]:", scale.getInfo())
 
     # --- Hydrologic conditioning (client-side arrays) ---
