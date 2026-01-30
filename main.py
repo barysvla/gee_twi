@@ -220,15 +220,15 @@ def run_pipeline(
         print("✅ Slope computed.")
 
         # Compute twi numpy
-        # Here we assume acc_km2 is area (m^2). If not, use acc_cells and cell area = px_area_np.
+        # acc_km2 is contributing area in km² -> declare units explicitly
         twi_np = compute_twi_numpy(
             acc_np=acc_km2,
             slope_deg_np=slope_np,
             acc_is_area=True,
-            cell_area=None,
+            acc_units="km2",
             min_slope_deg=0.1,
             nodata_mask=nodata_mask,
-            out_dtype="float32"
+            out_dtype="float32",
         )
         print("✅ Twi computed.")
 
