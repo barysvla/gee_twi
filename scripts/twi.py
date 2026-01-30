@@ -21,10 +21,10 @@ def compute_twi(flow_acc: ee.Image, slope_deg: ee.Image, *, min_slope_deg: float
     tan_slope = safe_slope.multiply(np.pi).divide(180.0).tan()
 
     # Convert contributing area from km² to m² to match the standard TWI definition
-    flow_acc_m2 = flow_acc.multiply(1e6) 
+    #flow_acc_m2 = flow_acc.multiply(1e6) 
     
     # TWI = ln(A / tan(beta))
-    return flow_acc_m2.divide(tan_slope).log().rename("TWI")
+    return flow_acc.divide(tan_slope).log().rename("TWI")
 
 
 def compute_twi_numpy(
