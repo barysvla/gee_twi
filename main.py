@@ -18,9 +18,8 @@ from scripts.flow_direction_qin_2007 import compute_flow_direction_qin_2007
 from scripts.flow_accumulation_mfd_fd8 import compute_flow_accumulation_mfd_fd8
 
 from scripts.clip_tif import clip_tif_by_geojson
-from scripts.slope import compute_slope, slope_ee_to_numpy_on_grid
-from scripts.twi import compute_twi
-from scripts.twi_np import compute_twi_numpy
+from scripts.slope import compute_slope, slope_ee_to_numpy
+from scripts.twi import compute_twi, compute_twi_numpy
 from scripts.visualization import visualize_map, vis_2sigma, plot_tif
 
 from google.colab import files
