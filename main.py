@@ -216,7 +216,7 @@ def run_pipeline(
     else:
         # Local mode: compute slope & TWI in numpy, save TIFFs
         # Slope via EE → numpy
-        slope_np = slope_ee_to_numpy_on_grid(grid, ee_dem_grid)
+        slope_np = slope_ee_to_numpy(grid, ee_dem_grid)
         print("✅ Slope computed.")
 
         # Compute twi numpy
