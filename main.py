@@ -6,8 +6,8 @@ import tempfile
 import os
 
 from scripts.io_grid import export_dem_and_area_to_arrays
-from scripts.save_array_as_geotiff import save_array_as_geotiff
 from scripts.ee_io import push_array_to_ee_geotiff
+from scripts.raster_io import save_array_as_geotiff, clip_tif_by_geojson
 
 from scripts.fill_depressions import priority_flood_fill
 from scripts.resolve_flats import resolve_flats_barnes_tie
@@ -17,7 +17,6 @@ from scripts.flow_direction_qin_2007 import compute_flow_direction_qin_2007
 
 from scripts.flow_accumulation_mfd_fd8 import compute_flow_accumulation_mfd_fd8
 
-from scripts.clip_tif import clip_tif_by_geojson
 from scripts.slope import compute_slope, slope_ee_to_numpy
 from scripts.twi import compute_twi, compute_twi_numpy
 from scripts.visualization import visualize_map, vis_2sigma, plot_tif
