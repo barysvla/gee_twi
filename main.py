@@ -93,7 +93,6 @@ def run_pipeline(
     crs          = grid["crs"]
     ee_dem_grid  = grid["ee_dem_grid"]           # DEM (Earth Engine grid-locked)
 
-
     scale = ee.Number(ee_dem_grid.projection().nominalScale())
     # print("nominalScale [m]:", scale.getInfo())
 
@@ -250,13 +249,6 @@ def run_pipeline(
         slope_clipped = clip_tif_by_geojson(geotiff_slope, geometry_wgs84, "slope_clipped.tif", band_name="Slope")
         twi_clipped = clip_tif_by_geojson(geotiff_twi, geometry_wgs84, "twi_clipped.tif", band_name="TWI")
 
-        # vis_twi = vis_2sigma_tif(twi_clipped, clamp_to_pct=(2,98), k=2.0,
-        #                 palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"])
-        # vis_slope = vis_2sigma_tif(slope_clipped, clamp_to_pct=(2,98), k=2.0,
-        #                 palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"])
-        # vis_acc = vis_2sigma_tif(acc_km2_clipped, clamp_to_pct=(2,98), k=2.0,
-        #                 palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"])
-
         # Plot TWI as a static figure from the clipped GeoTIFF
         print("🖼 Plotting TWI (local mode, percentile stretch)…")
         plot_tif(
@@ -280,27 +272,6 @@ def run_pipeline(
             "crs": crs,
             "nodata_mask": nodata_mask,
         }
-
-        # Map = visualize_map_leaf([
-        #     #(ee_flow_accumulation_cells, vis_acc_cells, "Flow accumulation (cells)"),
-        #     (acc_km2_clipped, vis_acc, "Flow accumulation (km²)"),
-        #     # (cti, vis_cti, "CTI - reference (Hydrography90m)"),
-        #     (twi_clipped, vis_twi, "TWI"),
-        # ], basemaps=["Esri.WorldImagery", "Esri.WorldTopoMap"])
-        
-        # return {
-        #     "mode": "local",
-        #     "acc_km2_array": acc_km2_clipped,
-        #     "slope_array": slope_clipped,
-        #     "twi_array": twi_clipped,
-        #     "geotiff_acc_km2_path": geotiff_acc_km2,
-        #     "geotiff_slope_path": geotiff_slope,
-        #     "geotiff_twi_path": geotiff_twi,
-        #     "transform": transform,
-        #     "crs": crs,
-        #     "nodata_mask": nodata_mask,
-        #     "map": Map,
-        # }
 
 if __name__ == "__main__":
     _ = run_pipeline()
