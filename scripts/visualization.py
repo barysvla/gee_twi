@@ -174,12 +174,16 @@ def plot_tif(
     p_high: float = 98.0,
     label: str = "TWI",
     title: str | None = None,
-):
+) -> None:
     """
-    Continuous visualization of a single-band GeoTIFF.
-    Low values = red, high values = blue (RdYlBu colormap).
+    Static visualization of a single-band GeoTIFF raster.
+
     The display range is derived from the [p_low, p_high] percentiles
-    (values outside this range are clipped to the extreme colors).
+    computed over valid raster values. Values outside this interval
+    are clipped to the extreme colors of the colormap.
+
+    This visualization is intended for local, static inspection of
+    raster outputs (e.g. figures for reports or theses).
     """
     with rasterio.open(tif_path) as src:
         arr = src.read(1).astype(float)
@@ -187,15 +191,16 @@ def plot_tif(
         if nodata is not None:
             arr = np.where(arr == nodata, np.nan, arr)
 
+    # Extract valid (finite) values
     valid = arr[np.isfinite(arr)]
     if valid.size == 0:
-        raise ValueError("Raster has no valid (finite) values.")
+        raise ValueError("Raster contains no valid (finite) values.")
 
-    # Percentile-based stretch
+    # Percentile-based contrast stretch
     vmin = float(np.nanpercentile(valid, p_low))
     vmax = float(np.nanpercentile(valid, p_high))
 
-    # Degeneracy protection
+    # Numerical safety: fallback to full range if percentiles collapse
     if not np.isfinite(vmin) or not np.isfinite(vmax) or vmin >= vmax:
         vmin = float(np.nanmin(valid))
         vmax = float(np.nanmax(valid))
@@ -206,7 +211,8 @@ def plot_tif(
     cbar.set_label(label)
 
     if title is None:
-        title = tif_path
+        title = os.path.basename(tif_path)
+
     plt.title(title)
     plt.axis("off")
     plt.tight_layout()
