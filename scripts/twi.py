@@ -71,10 +71,10 @@ def compute_twi_numpy(
     # - or cell-count accumulation converted by cell_area (scalar or per-cell raster)
     if acc_is_area:
         a = acc.copy()
-        if acc_units == "km2":
-            a *= 1e6
-        elif acc_units != "m2":
-            raise ValueError(f"Unsupported acc_units: {acc_units}")
+        # if acc_units == "km2":
+        #     a *= 1e6
+        # elif acc_units != "m2":
+        #     raise ValueError(f"Unsupported acc_units: {acc_units}")
     else:
         if cell_area is None:
             raise ValueError("cell_area must be provided when acc_is_area=False")
