@@ -1,13 +1,14 @@
 # scripts/visualization.py
 from __future__ import annotations
 
-from typing import Any, Iterable, Optional, Sequence, Tuple
+from typing import Optional, Sequence, Tuple
 
 import ee
 import geemap
 import matplotlib.pyplot as plt
 import numpy as np
 import rasterio
+import os
 
 LayerSpec = Tuple[ee.Image, dict, str]
 
@@ -101,6 +102,19 @@ def vis_2sigma(
     """
     img = image.select([band])
 
+    # Count valid pixels to detect fully masked/empty regions robustly.
+    # If the region is empty, reduceRegion(count) returns null -> guard with default 0.
+    n_valid = ee.Number(
+        img.reduceRegion(
+            reducer=ee.Reducer.count(),
+            geometry=region,
+            scale=scale,
+            bestEffort=best_effort,
+            maxPixels=max_pixels,
+            tileScale=tile_scale,
+        ).get(band, 0)
+    )
+
     # Compute mean and standard deviation over the region (masked pixels ignored).
     stats = img.reduceRegion(
         reducer=ee.Reducer.mean().combine(ee.Reducer.stdDev(), sharedInputs=True),
@@ -111,31 +125,22 @@ def vis_2sigma(
         tileScale=tile_scale,
     )
 
-    mu = ee.Number(stats.get(f"{band}_mean"))
-    sig = ee.Number(stats.get(f"{band}_stdDev"))
-
-    # Guard against missing stats (e.g., fully masked region).
-    # If mu or sig is null, getInfo() would fail.
-    mu_is_null = ee.Algorithms.IsEqual(stats.get(f"{band}_mean"), None)
-    sig_is_null = ee.Algorithms.IsEqual(stats.get(f"{band}_stdDev"), None)
+    # Use defaults to avoid null propagation in ee.Number() when region is empty.
+    mu = ee.Number(stats.get(f"{band}_mean", 0))
+    sig = ee.Number(stats.get(f"{band}_stdDev", 0))
 
     vmin = ee.Number(0)
     vmax = ee.Number(1)
 
     # If stats are present, compute μ ± k·σ.
-    vmin = ee.Algorithms.If(
-        mu_is_null.Or(sig_is_null),
-        vmin,
-        mu.subtract(sig.multiply(k)),
-    )
-    vmax = ee.Algorithms.If(
-        mu_is_null.Or(sig_is_null),
-        vmax,
-        mu.add(sig.multiply(k)),
-    )
+    vmin_sigma = mu.subtract(sig.multiply(k))
+    vmax_sigma = mu.add(sig.multiply(k))
 
-    vmin = ee.Number(vmin)
-    vmax = ee.Number(vmax)
+    # Use sigma stretch only if we have at least one valid pixel and sigma stretch is not degenerate.
+    use_sigma = n_valid.gt(0).And(vmax_sigma.neq(vmin_sigma)).And(sig.gt(0))
+
+    vmin = ee.Number(ee.Algorithms.If(use_sigma, vmin_sigma, vmin))
+    vmax = ee.Number(ee.Algorithms.If(use_sigma, vmax_sigma, vmax))
 
     # Optional percentile clamp for robustness (reduces influence of extreme outliers).
     if clamp_to_pct is not None:
@@ -148,18 +153,13 @@ def vis_2sigma(
             maxPixels=max_pixels,
             tileScale=tile_scale,
         )
-        pmin = ee.Number(p.get(f"{band}_p{lo}"))
-        pmax = ee.Number(p.get(f"{band}_p{hi}"))
 
-        # Guard against missing percentiles as well.
-        pmin_is_null = ee.Algorithms.IsEqual(p.get(f"{band}_p{lo}"), None)
-        pmax_is_null = ee.Algorithms.IsEqual(p.get(f"{band}_p{hi}"), None)
+        # If percentiles are missing, provide safe defaults.
+        pmin = ee.Number(p.get(f"{band}_p{lo}", vmin))
+        pmax = ee.Number(p.get(f"{band}_p{hi}", vmax))
 
-        vmin = ee.Algorithms.If(pmin_is_null, vmin, vmin.max(pmin))
-        vmax = ee.Algorithms.If(pmax_is_null, vmax, vmax.min(pmax))
-
-        vmin = ee.Number(vmin)
-        vmax = ee.Number(vmax)
+        vmin = ee.Number(ee.Algorithms.If(n_valid.gt(0), vmin.max(pmin), vmin))
+        vmax = ee.Number(ee.Algorithms.If(n_valid.gt(0), vmax.min(pmax), vmax))
 
     # Bring min/max to client side for geemap Map.addLayer().
     params = {"bands": [band], "min": float(vmin.getInfo()), "max": float(vmax.getInfo())}
