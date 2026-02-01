@@ -116,8 +116,8 @@ def vis_2sigma(
 
     # Guard against missing stats (e.g., fully masked region).
     # If mu or sig is null, getInfo() would fail.
-    mu_is_null = stats.get(f"{band}_mean").eq(None)
-    sig_is_null = stats.get(f"{band}_stdDev").eq(None)
+    mu_is_null = ee.Algorithms.IsEqual(stats.get(f"{band}_mean"), None)
+    sig_is_null = ee.Algorithms.IsEqual(stats.get(f"{band}_stdDev"), None)
 
     vmin = ee.Number(0)
     vmax = ee.Number(1)
@@ -152,8 +152,8 @@ def vis_2sigma(
         pmax = ee.Number(p.get(f"{band}_p{hi}"))
 
         # Guard against missing percentiles as well.
-        pmin_is_null = p.get(f"{band}_p{lo}").eq(None)
-        pmax_is_null = p.get(f"{band}_p{hi}").eq(None)
+        pmin_is_null = ee.Algorithms.IsEqual(p.get(f"{band}_p{lo}"), None)
+        pmax_is_null = ee.Algorithms.IsEqual(p.get(f"{band}_p{hi}"), None)
 
         vmin = ee.Algorithms.If(pmin_is_null, vmin, vmin.max(pmin))
         vmax = ee.Algorithms.If(pmax_is_null, vmax, vmax.min(pmax))
@@ -167,6 +167,7 @@ def vis_2sigma(
         params["palette"] = list(palette)
 
     return params
+
 
 def plot_tif(
     tif_path: str,
