@@ -185,12 +185,17 @@ def run_pipeline(
             ee_flow_accumulation, "flow_accumulation_km2", geometry, scale, k=2.0,
             palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"]
         )
+        vis_slope = vis_2sigma(
+            slope, "slope", geometry, scale, k=2.0,
+            palette=["#f7fbff", "#deebf7", "#c6dbef", "#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#084594"]
+        )
         # vis_acc_cells = vis_2sigma(
         #     ee_flow_accumulation_cells, "flow_accumulation_cells", geometry, scale, k=2.0,
         #     palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"]
         # )
 
         Map = visualize_map([
+            (slope, vis_slope, "Slope (°)"),
             # (ee_flow_accumulation_cells, vis_acc_cells, "Flow accumulation (cells)"),
             (ee_flow_accumulation, vis_acc, "Flow accumulation (km²)"),
             (cti, vis_cti, "CTI - reference (Hydrography90m)"),
