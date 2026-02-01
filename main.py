@@ -207,7 +207,7 @@ def run_pipeline(
             palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"]
         )
         vis_slope = vis_2sigma(
-            slope, "slope", geometry, scale, k=2.0,
+            slope, "Slope", geometry, scale, k=2.0,
             palette=["#f7fbff", "#deebf7", "#c6dbef", "#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#084594"]
         )
         # vis_acc_cells = vis_2sigma(
