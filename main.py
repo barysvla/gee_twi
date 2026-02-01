@@ -200,13 +200,13 @@ def run_pipeline(
 
         return {
             "mode": "cloud",
-            "ee_flow_accumulation": ee_flow_accumulation,
-            "ee_flow_accumulation_full": ee_flow_accumulation_full,
+            "slope": slope,
+            "flow_accumulation_km2": ee_flow_accumulation,
+            "flow_accumulation_km2_full": ee_flow_accumulation_full,
+            "twi": twi,
             "geometry": geometry,
             "geometry_accum": accum_geometry,
             "scale": scale,
-            "slope": slope,
-            "twi": twi,
             "map": Map,
         }
 
@@ -262,12 +262,9 @@ def run_pipeline(
         # Return metadata and file paths
         return {
             "mode": "local",
-            "acc_km2_array": acc_km2_clipped,
-            "slope_array": slope_clipped,
-            "twi_array": twi_clipped,
-            "geotiff_acc_km2_path": geotiff_acc_km2,
-            "geotiff_slope_path": geotiff_slope,
-            "geotiff_twi_path": geotiff_twi,
+            "slope": slope_clipped,
+            "flow_accumulation_km2": acc_km2_clipped,
+            "twi": twi_clipped,
             "transform": transform,
             "crs": crs,
             "nodata_mask": nodata_mask,
