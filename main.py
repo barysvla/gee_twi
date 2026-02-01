@@ -141,6 +141,10 @@ def run_pipeline(
     )
     print("✅ Flow accumulation computed.")
 
+    acc_cells = compute_flow_accumulation_mfd_fd8(
+        flow_direction, nodata_mask=nodata_mask, out="cells"
+    )
+    
     # Branch: cloud mode vs local mode
     if use_bucket:
         dict_acc = push_array_to_ee_geotiff(
@@ -159,9 +163,26 @@ def run_pipeline(
         )
         ee_flow_accumulation_full = dict_acc["image"]
 
+        dict_acc_cells = push_array_to_ee_geotiff(
+            acc_cells,
+            transform=transform,
+            crs=crs,
+            nodata_mask=nodata_mask,
+            bucket_name=f"{project_id}-ee-uploads",
+            project_id=project_id,
+            band_name="flow_accumulation_cells",
+            tmp_dir=grid.get("tmp_dir", None),
+            object_prefix="twi_uploads",
+            nodata_value=-9999.0,
+            # dtype="float32",
+            # build_mask_from_nodata=True,
+        )
+        ee_flow_accumulation_cells_full = dict_acc_cells["image"]
+        ee_flow_accumulation_cells = ee_flow_accumulation_cells_full.clip(geometry)
+        
         # Clip to original ROI
         ee_flow_accumulation = ee_flow_accumulation_full.clip(geometry)
-
+        
         # Slope & TWI via EE
         slope = compute_slope(ee_dem_grid).clip(geometry)
         print("✅ Slope computed.")
@@ -204,10 +225,16 @@ def run_pipeline(
         Map.centerObject(geometry, 12)
 
         return {
+            "dem_full": ee_dem_grid,
+            
             "mode": "cloud",
             "slope": slope,
             "flow_accumulation_km2": ee_flow_accumulation,
             "flow_accumulation_km2_full": ee_flow_accumulation_full,
+            
+            "flow_accumulation_cells": ee_flow_accumulation_cells,
+            "flow_accumulation_cells_full": ee_flow_accumulation_cells_full,
+            
             "twi": twi,
             "geometry": geometry,
             "geometry_accum": accum_geometry,
