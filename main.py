@@ -61,8 +61,6 @@ def run_pipeline(
         dem_raw = ee.ImageCollection("projects/sat-io/open-datasets/FABDEM")
     elif dem_source == "GLO30":
         dem_raw = ee.ImageCollection("COPERNICUS/DEM/GLO30").select("DEM")
-    elif dem_source == "GLO90":
-        dem_raw = ee.ImageCollection("COPERNICUS/DEM/GLO90").select("DEM")
     elif dem_source == "AW3D30":
         dem_raw = ee.ImageCollection("JAXA/ALOS/AW3D30/V4_1").select("DSM")
     elif dem_source == "SRTMGL1_003":
