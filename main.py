@@ -211,7 +211,7 @@ def run_pipeline(
             palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"]
         )
         vis_cti_Geomorpho90m = vis_2sigma(
-            cti_Geomorpho90m, "CTI Geomorpho90m", geometry, scale, k=2.0,
+            cti_Geomorpho90m, "CTI_Geomorpho90m", geometry, scale, k=2.0,
             palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"]
         )
         vis_acc = vis_2sigma(
@@ -255,7 +255,7 @@ def run_pipeline(
             "flow_accumulation_cells_full": ee_flow_accumulation_cells_full,
             
             "twi": twi,
-            "cti": cti,
+            "cti_Hydrography90m": cti,
             "cti_Geomorpho90m": cti_Geomorpho90m,
             
             "geometry": geometry,
