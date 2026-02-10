@@ -194,10 +194,18 @@ def run_pipeline(
 
         # CTI reference
         cti_ic = ee.ImageCollection("projects/sat-io/open-datasets/HYDROGRAPHY90/flow_index/cti")
-        cti = cti_ic.mosaic().toFloat().divide(ee.Number(1e8)).rename("CTI").clip(geometry)
+        cti = (
+            cti_ic.mosaic()
+            .toFloat()
+            .divide(ee.Number(1e8))
+            .translate(0, scale.multiply(-1)) # Shift the raster down by 1 pixel (negative Y direction)
+            .reproject(ee_dem_grid.projection()) # Re-apply the DEM grid's projection to align with other layers
+            .rename("CTI")
+            .clip(geometry)
+        )
 
         cti_Geomorpho90m_ic = ee.ImageCollection("projects/sat-io/open-datasets/Geomorpho90m/cti")
-        cti_Geomorpho90m = cti_Geomorpho90m_ic.mosaic().toFloat().divide(ee.Number(1e8)).rename("CTI_Geomorpho90m").clip(geometry)
+        cti_Geomorpho90m = cti_Geomorpho90m_ic.mosaic().toFloat().divide(ee.Number(1e8)).reproject(ee_dem_grid.projection()).rename("CTI_Geomorpho90m").clip(geometry)
         
         # Visualization
         vis_twi = vis_2sigma(
