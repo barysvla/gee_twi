@@ -273,7 +273,6 @@ def run_pipeline(
         print("✅ Slope computed.")
 
         # Compute twi numpy
-        # acc_km2 is contributing area in km² -> declare units explicitly
         twi_np = compute_twi_numpy(
             acc_np=acc_km2,
             slope_deg_np=slope_np,
@@ -286,9 +285,17 @@ def run_pipeline(
         print("✅ Twi computed.")
 
         # Save arrays to GeoTIFFs
+        geotiff_dem = save_array_as_geotiff(
+            dem_np, transform, crs, nodata_mask,
+            filename="dem_full.tif", band_name=DEM"
+        )
         geotiff_acc_km2 = save_array_as_geotiff(
             acc_km2, transform, crs, nodata_mask,
             filename="flow_accumulation_km2.tif", band_name="Flow accumulation (km2)"
+        )
+        geotiff_acc_cells = save_array_as_geotiff(
+            acc_cells, transform, crs, nodata_mask,
+            filename="flow_accumulation_cells.tif", band_name="Flow accumulation (cells)"
         )
         geotiff_slope = save_array_as_geotiff(
             slope_np, transform, crs, nodata_mask,
@@ -302,6 +309,7 @@ def run_pipeline(
         geometry_wgs84 = geometry.getInfo()          
 
         acc_km2_clipped = clip_tif_by_geojson(geotiff_acc_km2, geometry_wgs84, "acc_km2_clipped.tif", band_name="Flow accumulation (km2)")
+        acc_cells_clipped = clip_tif_by_geojson(geotiff_acc_cells, geometry_wgs84, "acc_cells_clipped.tif", band_name="Flow accumulation (cells)")
         slope_clipped = clip_tif_by_geojson(geotiff_slope, geometry_wgs84, "slope_clipped.tif", band_name="Slope")
         twi_clipped = clip_tif_by_geojson(geotiff_twi, geometry_wgs84, "twi_clipped.tif", band_name="TWI")
 
@@ -318,8 +326,10 @@ def run_pipeline(
         # Return metadata and file paths
         return {
             "mode": "local",
+            "dem_full": geotiff_dem,
             "slope": slope_clipped,
             "flow_accumulation_km2": acc_km2_clipped,
+            "flow_accumulation_cells": acc_cells_clipped,
             "twi": twi_clipped,
             "transform": transform,
             "crs": crs,
