@@ -162,7 +162,9 @@ def run_pipeline(
             # build_mask_from_nodata=True,
         )
         ee_flow_accumulation_full = dict_acc["image"]
-
+        # Clip to original ROI
+        ee_flow_accumulation = ee_flow_accumulation_full.clip(geometry)
+        
         dict_acc_cells = push_array_to_ee_geotiff(
             acc_cells,
             transform=transform,
@@ -178,13 +180,16 @@ def run_pipeline(
             # build_mask_from_nodata=True,
         )
         ee_flow_accumulation_cells_full = dict_acc_cells["image"]
-        ee_flow_accumulation_cells = ee_flow_accumulation_cells_full.clip(geometry)
-        
         # Clip to original ROI
-        ee_flow_accumulation = ee_flow_accumulation_full.clip(geometry)
+        ee_flow_accumulation_cells = ee_flow_accumulation_cells_full.clip(geometry)
 
         # MERIT Hydro - flow accumulation reference
-        MERIT_flow_accumulation_upa = ee.Image("MERIT/Hydro/v1_0_1").select("upa").rename("MERIT_flow_accumulation_upa").clip(geometry)
+        MERIT_flow_accumulation_upa = (
+            ee.Image("MERIT/Hydro/v1_0_1")
+            .select("upa")
+            .reproject(ee_dem_grid.projection())
+            .rename("MERIT_flow_accumulation_upa")
+            .clip(geometry)
         
         # Slope & TWI via EE
         slope = compute_slope(ee_dem_grid).clip(geometry)
@@ -203,9 +208,6 @@ def run_pipeline(
             .rename("CTI")
             .clip(geometry)
         )
-
-        cti_Geomorpho90m_ic = ee.ImageCollection("projects/sat-io/open-datasets/Geomorpho90m/cti")
-        cti_Geomorpho90m = cti_Geomorpho90m_ic.mosaic().toFloat().divide(ee.Number(1e8)).reproject(ee_dem_grid.projection()).rename("CTI_Geomorpho90m").clip(geometry)
         
         # Visualization
         vis_twi = vis_2sigma(
@@ -216,12 +218,12 @@ def run_pipeline(
             cti, "CTI", geometry, scale, k=2.0,
             palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"]
         )
-        vis_cti_Geomorpho90m = vis_2sigma(
-            cti_Geomorpho90m, "CTI_Geomorpho90m", geometry, scale, k=2.0,
+        vis_acc_km2 = vis_2sigma(
+            ee_flow_accumulation, "flow_accumulation_km2", geometry, scale, k=2.0,
             palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"]
         )
-        vis_acc = vis_2sigma(
-            ee_flow_accumulation, "flow_accumulation_km2", geometry, scale, k=2.0,
+        vis_acc_cells = vis_2sigma(
+            ee_flow_accumulation_cells, "flow_accumulation_cells", geometry, scale, k=2.0,
             palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"]
         )
         vis_acc_merit = vis_2sigma(
@@ -232,18 +234,13 @@ def run_pipeline(
             slope, "Slope", geometry, scale, k=2.0,
             palette=["#f7fbff", "#deebf7", "#c6dbef", "#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#084594"]
         )
-        # vis_acc_cells = vis_2sigma(
-        #     ee_flow_accumulation_cells, "flow_accumulation_cells", geometry, scale, k=2.0,
-        #     palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"]
-        # )
 
         Map = visualize_map([
             (slope, vis_slope, "Slope (°)"),
-            # (ee_flow_accumulation_cells, vis_acc_cells, "Flow accumulation (cells)"),
-            (ee_flow_accumulation, vis_acc, "Flow accumulation (km²)"),
-            (MERIT_flow_accumulation_upa, vis_acc_merit, "MERIT Flow accumulation (km²)"),
-            (cti, vis_cti, "CTI - reference (Hydrography90m)"),
-            (cti_Geomorpho90m, vis_cti_Geomorpho90m, "CTI - reference (Geomorpho90m)"),
+            (ee_flow_accumulation_cells, vis_acc_cells, "Flow accumulation (cells)"),
+            (MERIT_flow_accumulation_upa, vis_acc_merit, "(reference) Flow accumulation - MERIT (km²)"),
+            (ee_flow_accumulation, vis_acc_km2, "Flow accumulation (km²)"),
+            (cti, vis_cti, "(reference) CTI - Hydrography90m"),
             (twi, vis_twi, "TWI"),
         ])
         Map.centerObject(geometry, 12)
@@ -262,7 +259,6 @@ def run_pipeline(
             
             "twi": twi,
             "cti_Hydrography90m": cti,
-            "cti_Geomorpho90m": cti_Geomorpho90m,
             
             "geometry": geometry,
             "geometry_accum": accum_geometry,
