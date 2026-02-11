@@ -285,10 +285,12 @@ def run_pipeline(
         print("✅ Twi computed.")
 
         # Save arrays to GeoTIFFs
-        geotiff_dem = save_array_as_geotiff(
-            dem_np, transform, crs, nodata_mask,
-            filename="dem_full.tif", band_name=DEM"
-        )
+        # geotiff_dem = save_array_as_geotiff(
+        #     dem_np, transform, crs, nodata_mask,
+        #     filename="dem_full.tif", band_name=DEM"
+        # )
+        geotiff_dem = grid["paths"]["dem_elevations"]
+        
         geotiff_acc_km2 = save_array_as_geotiff(
             acc_km2, transform, crs, nodata_mask,
             filename="flow_accumulation_km2.tif", band_name="Flow accumulation (km2)"
