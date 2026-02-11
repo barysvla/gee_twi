@@ -247,7 +247,7 @@ def run_pipeline(
         Map.centerObject(geometry, 12)
 
         return {
-            "dem_full": ee_dem_grid,
+            "dem": ee_dem_grid,
             
             "mode": "cloud",
             "slope": slope,
@@ -349,7 +349,7 @@ def run_pipeline(
         # Return metadata and file paths
         return {
             "mode": "local",
-            "dem_full": geotiff_dem,
+            "dem": geotiff_dem,
             "slope": slope_clipped,
             "flow_accumulation_km2": acc_km2_clipped,
             "flow_accumulation_cells": acc_cells_clipped,
