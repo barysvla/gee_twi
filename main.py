@@ -144,7 +144,28 @@ def run_pipeline(
     acc_cells = compute_flow_accumulation_mfd_fd8(
         flow_direction, nodata_mask=nodata_mask, out="cells"
     )
-    
+        
+    # MERIT Hydro - flow accumulation reference
+    MERIT_flow_accumulation_upa = (
+        ee.Image("MERIT/Hydro/v1_0_1")
+        .select("upa")
+        .reproject(ee_dem_grid.projection())
+        .rename("MERIT_flow_accumulation_upa")
+        .clip(geometry)
+    )
+
+    # CTI reference
+    cti_ic = ee.ImageCollection("projects/sat-io/open-datasets/HYDROGRAPHY90/flow_index/cti")
+    cti = (
+        cti_ic.mosaic()
+        .toFloat()
+        .divide(ee.Number(1e8))
+        .translate(0, scale.multiply(-1)) # Shift the raster down by 1 pixel (negative Y direction)
+        .reproject(ee_dem_grid.projection()) # Re-apply the DEM grid's projection to align with other layers
+        .rename("CTI")
+        .clip(geometry)
+    )    
+
     # Branch: cloud mode vs local mode
     if use_bucket:
         dict_acc = push_array_to_ee_geotiff(
@@ -183,32 +204,12 @@ def run_pipeline(
         # Clip to original ROI
         ee_flow_accumulation_cells = ee_flow_accumulation_cells_full.clip(geometry)
 
-        # MERIT Hydro - flow accumulation reference
-        MERIT_flow_accumulation_upa = (
-            ee.Image("MERIT/Hydro/v1_0_1")
-            .select("upa")
-            .reproject(ee_dem_grid.projection())
-            .rename("MERIT_flow_accumulation_upa")
-            .clip(geometry)
-        
         # Slope & TWI via EE
         slope = compute_slope(ee_dem_grid).clip(geometry)
         print("✅ Slope computed.")
         twi = compute_twi(ee_flow_accumulation, slope).clip(geometry)
         print("✅ Twi computed.")
 
-        # CTI reference
-        cti_ic = ee.ImageCollection("projects/sat-io/open-datasets/HYDROGRAPHY90/flow_index/cti")
-        cti = (
-            cti_ic.mosaic()
-            .toFloat()
-            .divide(ee.Number(1e8))
-            .translate(0, scale.multiply(-1)) # Shift the raster down by 1 pixel (negative Y direction)
-            .reproject(ee_dem_grid.projection()) # Re-apply the DEM grid's projection to align with other layers
-            .rename("CTI")
-            .clip(geometry)
-        )
-        
         # Visualization
         vis_twi = vis_2sigma(
             twi, "TWI", geometry, scale, k=2.0,
@@ -284,11 +285,6 @@ def run_pipeline(
         )
         print("✅ Twi computed.")
 
-        # Save arrays to GeoTIFFs
-        # geotiff_dem = save_array_as_geotiff(
-        #     dem_np, transform, crs, nodata_mask,
-        #     filename="dem_full.tif", band_name=DEM"
-        # )
         geotiff_dem = grid["paths"]["dem_elevations"]
         
         geotiff_acc_km2 = save_array_as_geotiff(
@@ -308,8 +304,33 @@ def run_pipeline(
             filename="twi.tif", band_name="TWI"
         )
 
-        geometry_wgs84 = geometry.getInfo()          
+        # Export MERIT Hydro (flow accumulation - upa) to GeoTIFF using same aligned grid
+        # Note: although the key is 'dem_elevations', we are reusing the function to export other rasters
+        grid_MERIT_upa = export_dem_and_area_to_arrays( 
+            src=MERIT_flow_accumulation_upa,
+            region_geom=geometry,
+            band=None,
+            resample_method="bilinear",
+            nodata_value=-9999.0,
+            dem_filename="merit_upa.tif",
+            px_filename="dummy_px.tif"
+        )
+        geotiff_merit_upa = grid_MERIT_upa["paths"]["dem_elevations"]  # Actually contains upa, not DEM
 
+        # Export CTI reference to aligned GeoTIFF (using same function for consistency)
+        grid_cti = export_dem_and_area_to_arrays(
+            src=cti,
+            region_geom=geometry,
+            band=None,
+            resample_method="bilinear",
+            nodata_value=-9999.0,
+            dem_filename="cti.tif",
+            px_filename="dummy_px.tif"
+        )
+        geotiff_cti = grid_cti["paths"]["dem_elevations"]  # Actually contains CTI, not DEM
+
+        geometry_wgs84 = geometry.getInfo()
+    
         acc_km2_clipped = clip_tif_by_geojson(geotiff_acc_km2, geometry_wgs84, "acc_km2_clipped.tif", band_name="Flow accumulation (km2)")
         acc_cells_clipped = clip_tif_by_geojson(geotiff_acc_cells, geometry_wgs84, "acc_cells_clipped.tif", band_name="Flow accumulation (cells)")
         slope_clipped = clip_tif_by_geojson(geotiff_slope, geometry_wgs84, "slope_clipped.tif", band_name="Slope")
@@ -332,7 +353,9 @@ def run_pipeline(
             "slope": slope_clipped,
             "flow_accumulation_km2": acc_km2_clipped,
             "flow_accumulation_cells": acc_cells_clipped,
+            "MERIT_flow_accumulation_upa": geotiff_merit_upa,
             "twi": twi_clipped,
+            "cti_Hydrography90m": geotiff_cti,
             "transform": transform,
             "crs": crs,
             "nodata_mask": nodata_mask,
