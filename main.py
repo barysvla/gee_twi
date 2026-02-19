@@ -104,12 +104,13 @@ def run_pipeline(
     )
     print("✅ Fill pits completed.")
 
-    dem_resolved, flatmask, labels, stats = resolve_flats_barnes_2014(
+    dem_resolved, flatmask, labels, flowdirs, stats = resolve_flats_barnes_2014(
         dem_filled,
         nodata=np.nan,
         equal_tol=0.0,
         lower_tol=0.0,
-        apply_to_dem=True,
+        treat_oob_as_lower = True,
+        apply_to_dem="epsilon",
         epsilon=1e-5,
     )
     print("✅ Flats resolved.")
