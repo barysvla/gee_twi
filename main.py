@@ -115,33 +115,48 @@ def run_pipeline(
     )
     print("✅ Flats resolved.")
 
-    # --- Flow direction (on buffered grid) ---
-    if flow_method == "quinn_1991":
+    if flow_method == "mfd_quinn_1991":
+         # --- Flow direction (on buffered grid) ---
         flow_direction = compute_flow_direction_quinn_1991(
             dem_resolved, transform, p=1.0, nodata_mask=nodata_mask
         )
-    elif flow_method == "qin_2007":
-        flow_direction = compute_flow_direction_qin_2007(
-            dem_resolved, transform, nodata_mask=nodata_mask
+        print("✅ Flow direction computed.")
+        
+        # --- Flow accumulation (on buffered domain) --- 
+        acc_km2 = compute_flow_accumulation_mfd_fd8(
+            flow_direction,
+            nodata_mask=nodata_mask,
+            pixel_area_m2=px_area_np,
+            out="km2",
+            renormalize=False,
+            cycle_check=True
         )
+        
+        acc_cells = compute_flow_accumulation_mfd_fd8(
+            flow_direction, nodata_mask=nodata_mask, out="cells"
+        )
+        print("✅ Flow accumulation computed.")
+        
+    elif flow_method == "d8":
+        # --- Flow direction (on buffered grid) ---
+        flow_direction = compute_flow_direction_d8(
+            dem_resolved, transform, nodata_mask=nodata_mask, min_slope=0.0
+        )
+        print("✅ Flow direction computed.")
+
+        acc_km2 = compute_flow_accumulation_d8(
+            flow_direction,
+            nodata_mask=nodata_mask,
+            pixel_area_m2 = px_area_np,
+            out="cells"
+        )
+        
+        acc_cells = compute_flow_accumulation_d8(
+            flow_direction, nodata_mask=nodata_mask, out="cells"
+        )
+        print("✅ Flow accumulation computed.")
     else:
         raise ValueError(f"Unsupported flow_method: {flow_method}")
-    print("✅ Flow direction computed.")
-
-    # --- Flow accumulation (on buffered domain) ---
-    acc_km2 = compute_flow_accumulation_mfd_fd8(
-        flow_direction,
-        nodata_mask=nodata_mask,
-        pixel_area_m2=px_area_np,
-        out="km2",
-        renormalize=False,
-        cycle_check=True,
-    )
-    print("✅ Flow accumulation computed.")
-
-    acc_cells = compute_flow_accumulation_mfd_fd8(
-        flow_direction, nodata_mask=nodata_mask, out="cells"
-    )
         
     # MERIT Hydro - flow accumulation reference
     MERIT_flow_accumulation_upa = (
