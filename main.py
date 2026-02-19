@@ -10,7 +10,7 @@ from scripts.ee_io import push_array_to_ee_geotiff
 from scripts.raster_io import save_array_as_geotiff, clip_tif_by_geojson
 
 from scripts.fill_depressions import priority_flood_fill
-from scripts.resolve_flats import resolve_flats_barnes_tie
+from scripts.resolve_flats import resolve_flats_barnes_2014
 
 from scripts.flow_direction_quinn_1991 import compute_flow_direction_quinn_1991
 from scripts.flow_direction_qin_2007 import compute_flow_direction_qin_2007
@@ -104,16 +104,13 @@ def run_pipeline(
     )
     print("✅ Fill pits completed.")
 
-    dem_resolved, flatmask, labels, stats = resolve_flats_barnes_tie(
+    dem_resolved, flatmask, labels, stats = resolve_flats_barnes_2014(
         dem_filled,
         nodata=np.nan,
-        epsilon=2e-5,
-        equal_tol=1e-3,
+        equal_tol=0.0,
         lower_tol=0.0,
-        treat_oob_as_lower=True,
-        require_low_edge_only=True,
-        force_all_flats=False,
-        include_equal_ties=True,
+        apply_to_dem=True,
+        epsilon=1e-5,
     )
     print("✅ Flats resolved.")
 
