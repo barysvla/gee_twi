@@ -119,13 +119,13 @@ def run_pipeline(
     print("✅ Flats resolved.")
 
     if flow_method == "mfd_quinn_1991":
-         # --- Flow direction (on buffered grid) ---
+         # --- Flow direction ---
         flow_direction = compute_flow_direction_quinn_1991(
             dem_resolved, transform, p=1.0, nodata_mask=nodata_mask
         )
         print("✅ Flow direction computed.")
         
-        # --- Flow accumulation (on buffered domain) --- 
+        # --- Flow accumulation --- 
         acc_km2 = compute_flow_accumulation_mfd_fd8(
             flow_direction,
             nodata_mask=nodata_mask,
@@ -141,12 +141,13 @@ def run_pipeline(
         print("✅ Flow accumulation computed.")
         
     elif flow_method == "d8":
-        # --- Flow direction (on buffered grid) ---
+        # --- Flow direction ---
         flow_direction = compute_flow_direction_d8(
             dem_resolved, transform, nodata_mask=nodata_mask, min_slope=0.0
         )
         print("✅ Flow direction computed.")
 
+        # --- Flow accumulation --- 
         acc_km2 = compute_flow_accumulation_d8(
             flow_direction,
             nodata_mask=nodata_mask,
