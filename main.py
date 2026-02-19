@@ -72,6 +72,8 @@ def run_pipeline(
         dem_raw = ee.Image("projects/sat-io/open-datasets/ASTER/GDEM").select("b1")
     elif dem_source == "CGIAR_SRTM90":
         dem_raw = ee.Image("CGIAR/SRTM90_V4").select("elevation")
+    elif dem_source == "MERIT_DEM":
+        dem_raw = ee.Image("MERIT/DEM/v1_0_3").select("dem")
     elif dem_source == "MERIT_Hydro":
         dem_raw = ee.Image("MERIT/Hydro/v1_0_1").select("elv")
     else:
