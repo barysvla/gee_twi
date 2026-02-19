@@ -13,9 +13,10 @@ from scripts.fill_depressions import priority_flood_fill
 from scripts.resolve_flats import resolve_flats_barnes_2014
 
 from scripts.flow_direction_quinn_1991 import compute_flow_direction_quinn_1991
-from scripts.flow_direction_qin_2007 import compute_flow_direction_qin_2007
+from scripts.flow_direction_d8 import compute_flow_direction_d8
 
 from scripts.flow_accumulation_mfd_fd8 import compute_flow_accumulation_mfd_fd8
+from scripts.flow_accumulation_d8 import compute_flow_accumulation_d8
 
 from scripts.slope import compute_slope, slope_ee_to_numpy
 from scripts.twi import compute_twi, compute_twi_numpy
