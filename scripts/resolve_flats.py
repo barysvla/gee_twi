@@ -19,14 +19,14 @@ NODATA_DIR = -1
 NOFLOW_DIR = -2
 
 
-def resolve_flats_barnes_2014(
+def resolve_flats_barnes_2014_pseudocode(
     dem: np.ndarray,
     nodata: float = np.nan,
     *,
     equal_tol: float = 0.0,
     lower_tol: float = 0.0,
     treat_oob_as_lower: bool = True,
-    apply_to_dem: str = "none",  # "none" | "epsilon" | "nextafter"
+    apply_to_dem: str = "none",  # "none" | "epsilon"
     epsilon: float = 1e-5,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, int]]:
     """
@@ -51,8 +51,8 @@ def resolve_flats_barnes_2014(
     - flow directions for previously NOFLOW cells are reassigned using masked D8 within
       each labeled flat.
 
-    Optionally, the DEM itself can be modified (epsilon or minimal floating-point increments),
-    but the standard workflow uses only `FlatMask` and `Labels`.
+    Optionally, the DEM itself can be modified by adding epsilon * FlatMask, but the standard
+    workflow uses only `FlatMask` and `Labels`.
 
     Returns:
       dem_out   : float64 DEM, optionally modified on drainable flats
@@ -88,19 +88,12 @@ def resolve_flats_barnes_2014(
         return (z_nbr - z_here) < -lower_tol
 
     def is_edge_cell(r: int, c: int) -> bool:
-        # Edge cells are treated specially when treat_oob_as_lower=True (Barnes assumption)
+        # Edge cells are treated specially when treat_oob_as_lower=True
         return r == 0 or c == 0 or r == n_rows - 1 or c == n_cols - 1
 
     # -------------------------------------------------------------------------
     # STEP 0: Initial flow directions (Algorithm 2 example: D8FLOWDIRS)
     # -------------------------------------------------------------------------
-    # We compute D8 flow directions for each valid cell:
-    # - pick the neighbor with minimum elevation among those strictly lower than the cell
-    # - if no strictly lower neighbor exists, mark NOFLOW_DIR (flat/pit candidate)
-    #
-    # Barnes et al. state that DEM edge cells can be assumed to drain outward; enabling
-    # treat_oob_as_lower approximates this by marking edge cells as "flow-defined" even
-    # if no in-bounds lower neighbor exists.
     flowdirs = np.full((n_rows, n_cols), NODATA_DIR, dtype=np.int16)
 
     for r in range(n_rows):
@@ -143,11 +136,6 @@ def resolve_flats_barnes_2014(
     # -------------------------------------------------------------------------
     # STEP 1: Locate flat boundary cells (Algorithm 3: FLATEDGES)
     # -------------------------------------------------------------------------
-    # Two queues are built:
-    # - HighEdges: NOFLOW cells that touch any strictly higher neighbor.
-    # - LowEdges : flow-defined cells that touch any equal-elevation NOFLOW neighbor.
-    #
-    # LowEdges are crucial: if none exist, then either there are no flats or flats are undrainable.
     high_edges: Deque[Tuple[int, int]] = deque()
     low_edges: Deque[Tuple[int, int]] = deque()
 
@@ -163,20 +151,21 @@ def resolve_flats_barnes_2014(
                 if not in_bounds(nr, nc) or not valid[nr, nc]:
                     continue
 
-                # Low edge criterion (Algorithm 3, lines 7-9):
-                # c is flow-defined, n is NOFLOW, and elevations are equal -> push c to LowEdges.
-                if flowdirs[r, c] != NOFLOW_DIR and flowdirs[nr, nc] == NOFLOW_DIR and is_equal(z0, dem_values[nr, nc]):
+                # Low edge criterion (Algorithm 3, lines 7-9)
+                if (
+                    flowdirs[r, c] != NOFLOW_DIR
+                    and flowdirs[nr, nc] == NOFLOW_DIR
+                    and is_equal(z0, dem_values[nr, nc])
+                ):
                     low_edges.append((r, c))
                     break
 
-                # High edge criterion (Algorithm 3, lines 10-12):
-                # c is NOFLOW and has any higher neighbor -> push c to HighEdges.
+                # High edge criterion (Algorithm 3, lines 10-12)
                 if flowdirs[r, c] == NOFLOW_DIR and (dem_values[nr, nc] - z0) > equal_tol:
                     high_edges.append((r, c))
                     break
 
     if len(low_edges) == 0:
-        # No drainable flats can be processed. Return empty masks and diagnostic stats.
         dem_out = dem_values.copy()
         dem_out[~valid] = (np.nan if np.isnan(nodata) else nodata)
 
@@ -189,10 +178,10 @@ def resolve_flats_barnes_2014(
             "n_low_edges": 0,
             "n_high_edges": int(len(high_edges)),
             "note_undrainable_flats": int(len(high_edges) > 0),
+            "apply_to_dem_mode": 0,
         }
         return dem_out, flat_mask, labels, flowdirs, stats
 
-    # Deduplicate queue entries to keep BFS behavior deterministic and avoid redundant work.
     def dedup_queue(q: Deque[Tuple[int, int]]) -> Deque[Tuple[int, int]]:
         seen = set()
         out = deque()
@@ -208,13 +197,6 @@ def resolve_flats_barnes_2014(
     # -------------------------------------------------------------------------
     # STEP 1b: Label each drainable flat (Algorithm 4: LABELFLATS)
     # -------------------------------------------------------------------------
-    # Flats are labeled by flood-filling from each LowEdges cell across connected cells
-    # of equal elevation. The label raster:
-    # - 0 outside flats
-    # - positive integer label inside each flat
-    #
-    # Note: This matches the paper's algorithmic description: LowEdges act as seeds for
-    # finding connected components of equal elevation.
     labels = np.zeros((n_rows, n_cols), dtype=np.int32)
     current_label = 0
 
@@ -222,7 +204,6 @@ def resolve_flats_barnes_2014(
         if labels[sr, sc] != 0:
             continue
 
-        # Seed elevation defines the entire flat elevation for connected-component fill.
         E = dem_values[sr, sc]
         current_label += 1
 
@@ -232,27 +213,20 @@ def resolve_flats_barnes_2014(
         while to_fill:
             r, c = to_fill.popleft()
 
-            # Bounds and validity checks
             if not in_bounds(r, c) or not valid[r, c]:
                 continue
-
-            # Flat membership is defined by equality with the seed elevation E.
             if not is_equal(dem_values[r, c], E):
                 continue
-
-            # Skip already labeled cells (prevents infinite loops and redundant work).
             if labels[r, c] != 0:
                 continue
 
             labels[r, c] = current_label
 
-            # Enqueue all neighbors; they will be filtered by checks above.
             for dr, dc in NEIGHBOR_OFFSETS_8:
                 to_fill.append((r + dr, c + dc))
 
-    # Remove HighEdges that are not part of any labeled (drainable) flat (Algorithm 1, lines 19–23).
-    # Also enforce the paper's rule: if a cell touches both higher and lower terrain, it is treated as
-    # adjacent to lower terrain; therefore it must not be used as a HighEdge in Step 2.
+    # Remove HighEdges that are not part of any labeled flat.
+    # Enforce: if a cell is also in LowEdges, it must not be used as a HighEdge.
     low_edge_set = set(low_edges)
 
     high_edges_filtered = deque()
@@ -274,10 +248,6 @@ def resolve_flats_barnes_2014(
     # -------------------------------------------------------------------------
     # STEP 2: Gradient away from higher terrain (Algorithm 5: AWAYFROMHIGHER)
     # -------------------------------------------------------------------------
-    # This step assigns an integer "layer" number (loops) to flat cells by growing inward
-    # from HighEdges using a FIFO queue. The marker trick produces a discrete distance
-    # in terms of BFS rings. For each flat label, FlatHeight[label] stores the maximum
-    # loops value reached in that flat.
     flat_mask = np.zeros((n_rows, n_cols), dtype=np.int32)
     flat_height = np.zeros(current_label + 1, dtype=np.int32)
 
@@ -291,12 +261,10 @@ def resolve_flats_barnes_2014(
         r, c = q.popleft()
 
         if (r, c) == MARKER:
-            # Completed one BFS "ring" across all flats; advance ring counter.
             loops += 1
             q.append(MARKER)
             continue
 
-        # Skip if already set (prevents processing duplicates).
         if flat_mask[r, c] > 0:
             continue
 
@@ -306,7 +274,6 @@ def resolve_flats_barnes_2014(
         if loops > flat_height[lbl]:
             flat_height[lbl] = loops
 
-        # Expand only within the same flat label and only through NOFLOW cells.
         for dr, dc in NEIGHBOR_OFFSETS_8:
             nr, nc = r + dr, c + dc
             if not in_bounds(nr, nc) or not valid[nr, nc]:
@@ -320,16 +287,6 @@ def resolve_flats_barnes_2014(
     # -------------------------------------------------------------------------
     # STEP 3: Gradient towards lower terrain + superposition (Algorithm 6: TOWARDSLOWER)
     # -------------------------------------------------------------------------
-    # The paper's procedure:
-    #   1) negate FlatMask (cells not in flats remain 0).
-    #   2) run BFS from LowEdges using the same marker/ring mechanism.
-    #   3) for each visited cell:
-    #        if previously incremented in Step 2 (FlatMask < 0), invert it by adding FlatHeight[label]
-    #        then add 2*loops (twice the towards-lower gradient).
-    #        else (FlatMask == 0), set it to 2*loops.
-    #
-    # The 2x factor guarantees drainage dominates in ambiguous situations, eliminating
-    # the need for iterative passes (key improvement over Garbrecht & Martz).
     flat_mask = -flat_mask
 
     loops = 1
@@ -344,7 +301,6 @@ def resolve_flats_barnes_2014(
             q.append(MARKER)
             continue
 
-        # If already positive, it has been processed in this step.
         if flat_mask[r, c] > 0:
             continue
 
@@ -355,7 +311,6 @@ def resolve_flats_barnes_2014(
         else:
             flat_mask[r, c] = 2 * loops
 
-        # Expand only within the same labeled flat and only through NOFLOW cells.
         for dr, dc in NEIGHBOR_OFFSETS_8:
             nr, nc = r + dr, c + dc
             if not in_bounds(nr, nc) or not valid[nr, nc]:
@@ -369,10 +324,6 @@ def resolve_flats_barnes_2014(
     # -------------------------------------------------------------------------
     # STEP 4: Determine flow directions over flats using FlatMask (Algorithm 7: D8MASKEDFLOWDIRS)
     # -------------------------------------------------------------------------
-    # For each cell that still has NOFLOW_DIR:
-    #   - consider only neighbors within the same label (prevents cross-flat leakage)
-    #   - choose the neighbor with minimal FlatMask
-    # This creates a monotone descent in FlatMask that drains the flat.
     for r in range(n_rows):
         for c in range(n_cols):
             if flowdirs[r, c] == NODATA_DIR:
@@ -382,7 +333,7 @@ def resolve_flats_barnes_2014(
 
             lbl = labels[r, c]
             if lbl == 0:
-                continue  # unresolved (undrainable) or not a flat
+                continue
 
             emin = flat_mask[r, c]
             best_dir = None
@@ -403,32 +354,17 @@ def resolve_flats_barnes_2014(
                 flowdirs[r, c] = best_dir
 
     # -------------------------------------------------------------------------
-    # Optional: alter DEM elevations instead of using the mask (paper discussion + Algorithm 8 spirit)
+    # Optional: alter DEM elevations instead of using the mask (epsilon only)
     # -------------------------------------------------------------------------
     dem_out = dem_values.copy()
 
-    if apply_to_dem not in ("none", "epsilon", "nextafter"):
-        raise ValueError('apply_to_dem must be "none", "epsilon", or "nextafter".')
+    if apply_to_dem not in ("none", "epsilon"):
+        raise ValueError('apply_to_dem must be "none" or "epsilon".')
 
     if apply_to_dem == "epsilon":
-        # Simple approach: add epsilon * FlatMask on drainable flat cells.
-        # This is *not* the paper's preferred minimal increment strategy.
         m = (labels > 0) & valid & (flat_mask > 0)
         dem_out[m] = dem_out[m] + epsilon * flat_mask[m]
 
-    elif apply_to_dem == "nextafter":
-        # Minimal increment approach: apply np.nextafter repeatedly.
-        # This can be slow for very large FlatMask values; use only if explicitly needed.
-        m = (labels > 0) & valid & (flat_mask > 0)
-        idx = np.argwhere(m)
-        for r, c in idx:
-            steps = int(flat_mask[r, c])
-            z = dem_out[r, c]
-            for _ in range(steps):
-                z = np.nextafter(z, np.inf)
-            dem_out[r, c] = z
-
-    # Normalize NoData back to the requested marker
     dem_out[~valid] = (np.nan if np.isnan(nodata) else nodata)
 
     stats: Dict[str, int] = {
@@ -438,7 +374,8 @@ def resolve_flats_barnes_2014(
         "n_high_edges": int(len(high_edges)),
         "removed_highedges_unlabeled": int(removed_unlabeled),
         "removed_highedges_low_dominates": int(removed_low_dominates),
-        "apply_to_dem_mode": {"none": 0, "epsilon": 1, "nextafter": 2}[apply_to_dem],
+        "apply_to_dem_mode": {"none": 0, "epsilon": 1}[apply_to_dem],
     }
 
     return dem_out, flat_mask.astype(np.int32), labels.astype(np.int32), flowdirs, stats
+    
