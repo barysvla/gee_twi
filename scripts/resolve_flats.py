@@ -19,7 +19,7 @@ NODATA_DIR = -1
 NOFLOW_DIR = -2
 
 
-def resolve_flats_barnes_2014_pseudocode(
+def resolve_flats_barnes_2014(
     dem: np.ndarray,
     nodata: float = np.nan,
     *,
