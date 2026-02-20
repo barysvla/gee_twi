@@ -131,8 +131,6 @@ def run_pipeline(
             nodata_mask=nodata_mask,
             pixel_area_m2=px_area_np,
             out="km2",
-            renormalize=False,
-            cycle_check=True
         )
         
         acc_cells = compute_flow_accumulation_mfd_fd8(
@@ -143,7 +141,7 @@ def run_pipeline(
     elif flow_method == "d8":
         # --- Flow direction ---
         flow_direction = compute_flow_direction_d8(
-            dem_resolved, transform, nodata_mask=nodata_mask, min_slope=0.0
+            dem_resolved, transform, nodata_mask=nodata_mask
         )
         print("✅ Flow direction computed.")
 
@@ -152,7 +150,7 @@ def run_pipeline(
             flow_direction,
             nodata_mask=nodata_mask,
             pixel_area_m2 = px_area_np,
-            out="cells"
+            out="km2"
         )
         
         acc_cells = compute_flow_accumulation_d8(
