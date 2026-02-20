@@ -25,7 +25,6 @@ def compute_flow_direction_d8(
     *,
     nodata_mask: np.ndarray | None = None,
     nodata_value: float | None = None,
-    min_slope: float = 0.0,
     out_dtype=np.int16,
 ) -> np.ndarray:
     """
@@ -73,7 +72,7 @@ def compute_flow_direction_d8(
     # --- Output allocation ---------------------------------------------------
     dir_idx = np.full((h, w), -1, dtype=out_dtype)
 
-    # --- Main scan over raster cells -----------------------------------------
+    # --- Main scan over raster cells ----------------------------------------
     for i in range(h):
         for j in range(w):
             if nodata[i, j]:
@@ -106,9 +105,6 @@ def compute_flow_direction_d8(
                     continue
 
                 tan_beta = dz / d
-                if tan_beta <= float(min_slope):
-                    continue
-
                 if tan_beta > best_tan:
                     best_tan = tan_beta
                     best_k = k
@@ -117,3 +113,4 @@ def compute_flow_direction_d8(
 
     dir_idx[nodata] = -1
     return dir_idx
+    
