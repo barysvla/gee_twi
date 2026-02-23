@@ -100,10 +100,10 @@ def run_pipeline(
     # print("nominalScale [m]:", scale.getInfo())
 
     # --- Hydrologic conditioning (client-side arrays) ---
-    dem_filled, fill_depth = priority_flood_fill(
+    dem_filled = priority_flood_fill(
         dem_np,
         seed_internal_nodata_as_outlet=True,
-        return_fill_depth=True,
+        return_fill_depth=False,
     )
     print("✅ Fill pits completed.")
 
