@@ -247,8 +247,8 @@ def export_dem_and_area_to_arrays(
         dem_elevations[nodata_mask] = np.nan
 
         return {
-            "dem_elevations": dem_elevations,
-            "pixel_area_m2": pixel_area_data,
+            "dem_elevations_np": dem_elevations,
+            "pixel_area_m2_np": pixel_area_data,
             "transform": transform,
             "crs": out_crs,
             "nodata_mask": nodata_mask,
