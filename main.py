@@ -105,7 +105,7 @@ def run_pipeline(
         seed_internal_nodata_as_outlet=True,
         return_fill_depth=False,
     )
-    print("✅ Fill pits completed.")
+    print("✅ Fill depressions completed.")
 
     dem_resolved, flatmask, labels, flowdirs, stats = resolve_flats_barnes_2014(
         dem_filled,
