@@ -89,19 +89,19 @@ def run_pipeline(
         snap_region_to_grid=True,
     )
 
-    dem_np       = grid["dem_elevations"]        # DEM in numpy
-    px_area_np   = grid["pixel_area_m2"]         # pixel area (numpy)
-    transform    = grid["transform"]
-    nodata_mask  = grid["nodata_mask"]
-    crs          = grid["crs"]
-    ee_dem_grid  = grid["ee_dem_grid"]           # DEM (Earth Engine grid-locked)
+    dem_elevations_np = grid["dem_elevations_np"]        # DEM in numpy
+    pixel_area_m2_np  = grid["pixel_area_m2_np"]         # pixel area (numpy)
+    transform         = grid["transform"]
+    nodata_mask       = grid["nodata_mask"]
+    crs               = grid["crs"]
+    ee_dem_grid       = grid["ee_dem_grid"]           # DEM (Earth Engine grid-locked)
 
     scale = ee.Number(ee_dem_grid.projection().nominalScale())
     # print("nominalScale [m]:", scale.getInfo())
 
     # --- Hydrologic conditioning (client-side arrays) ---
     dem_filled = priority_flood_fill(
-        dem_np,
+        dem_elevations_np,
         seed_internal_nodata_as_outlet=True,
         return_fill_depth=False,
     )
@@ -129,7 +129,7 @@ def run_pipeline(
         acc_km2 = compute_flow_accumulation_mfd_fd8(
             flow_direction,
             nodata_mask=nodata_mask,
-            pixel_area_m2=px_area_np,
+            pixel_area_m2=pixel_area_m2_np,
             out="km2",
         )
         
@@ -149,7 +149,7 @@ def run_pipeline(
         acc_km2 = compute_flow_accumulation_d8(
             flow_direction,
             nodata_mask=nodata_mask,
-            pixel_area_m2 = px_area_np,
+            pixel_area_m2 = pixel_area_m2_np,
             out="km2"
         )
         
