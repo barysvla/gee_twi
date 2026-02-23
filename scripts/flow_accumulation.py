@@ -20,7 +20,6 @@ def compute_flow_accumulation_fd8(
     nodata_mask: np.ndarray | None = None,
     pixel_area_m2: float | np.ndarray | None = None,
     out: Literal["cells", "m2", "km2"] = "km2",
-    renormalize: bool = False,
     cycle_check: bool = True,
 ) -> np.ndarray:
     """
@@ -48,8 +47,6 @@ def compute_flow_accumulation_fd8(
         Required for out='m2'/'km2'. Scalar or (H, W).
     out
         'cells' / 'm2' / 'km2'
-    renormalize
-        For MFD only: renormalize positive weights per cell to sum to 1 (safety guard).
     cycle_check
         If True, raise on cycles (typically unresolved flats/sinks/inconsistent directions).
 
@@ -100,11 +97,6 @@ def compute_flow_accumulation_fd8(
         Wgt = np.nan_to_num(Wgt, nan=0.0, posinf=0.0, neginf=0.0)
         np.maximum(Wgt, 0.0, out=Wgt)
         Wgt[nodata, :] = 0.0
-
-        if renormalize:
-            sums = Wgt.sum(axis=2, dtype=np.float32)
-            pos = (sums > 0.0) & (~nodata)
-            Wgt[pos, :] /= sums[pos, None]
 
     # --- Initialize accumulation --------------------------------------------
     if out == "cells":
