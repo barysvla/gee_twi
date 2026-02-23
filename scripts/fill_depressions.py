@@ -13,7 +13,7 @@ def priority_flood_fill(
     dem: np.ndarray,
     nodata: float = np.nan,
     seed_internal_nodata_as_outlet: bool = True,
-    return_fill_depth: bool = True,
+    return_fill_depth: bool = False,
 ):
     """
     Priority-Flood (Barnes et al.) depression filling.
