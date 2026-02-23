@@ -15,8 +15,7 @@ from scripts.resolve_flats import resolve_flats_barnes_2014
 from scripts.flow_direction_quinn_1991 import compute_flow_direction_quinn_1991
 from scripts.flow_direction_d8 import compute_flow_direction_d8
 
-from scripts.flow_accumulation_mfd_fd8 import compute_flow_accumulation_mfd_fd8
-from scripts.flow_accumulation_d8 import compute_flow_accumulation_d8
+from scripts.flow_accumulation import compute_flow_accumulation_fd8
 
 from scripts.slope import compute_slope, slope_ee_to_numpy
 from scripts.twi import compute_twi, compute_twi_numpy
@@ -119,42 +118,48 @@ def run_pipeline(
     print("✅ Flats resolved.")
 
     if flow_method == "mfd_quinn_1991":
-         # --- Flow direction ---
+         # --- Flow direction MFD---
         flow_direction = compute_flow_direction_quinn_1991(
             dem_resolved, transform, p=1.0, nodata_mask=nodata_mask
         )
         print("✅ Flow direction computed.")
         
-        # --- Flow accumulation --- 
-        acc_km2 = compute_flow_accumulation_mfd_fd8(
-            flow_direction,
+        # --- Flow accumulation (km2)--- 
+        acc_km2 = compute_flow_accumulation_fd8(
+            flow_weights=flow_direction,
             nodata_mask=nodata_mask,
             pixel_area_m2=pixel_area_m2_np,
             out="km2",
         )
         
-        acc_cells = compute_flow_accumulation_mfd_fd8(
-            flow_direction, nodata_mask=nodata_mask, out="cells"
+        # --- Flow accumulation (cells)--- 
+        acc_cells = compute_flow_accumulation_fd8(
+            flow_weights=flow_direction,
+            nodata_mask=nodata_mask,
+            out="cells",
         )
         print("✅ Flow accumulation computed.")
         
     elif flow_method == "d8":
-        # --- Flow direction ---
+        # --- Flow direction D8---
         flow_direction = compute_flow_direction_d8(
             dem_resolved, transform, nodata_mask=nodata_mask
         )
         print("✅ Flow direction computed.")
 
-        # --- Flow accumulation --- 
-        acc_km2 = compute_flow_accumulation_d8(
-            flow_direction,
+        # --- Flow accumulation (km2)--- 
+        acc_km2 = compute_flow_accumulation_fd8(
+            dir_idx=flow_direction,
             nodata_mask=nodata_mask,
-            pixel_area_m2 = pixel_area_m2_np,
-            out="km2"
+            pixel_area_m2=pixel_area_m2_np,
+            out="km2",
         )
-        
-        acc_cells = compute_flow_accumulation_d8(
-            flow_direction, nodata_mask=nodata_mask, out="cells"
+
+        # --- Flow accumulation (cells)--- 
+        acc_cells = compute_flow_accumulation_fd8(
+            dir_idx=flow_direction,
+            nodata_mask=nodata_mask,
+            out="cells",
         )
         print("✅ Flow accumulation computed.")
     else:
