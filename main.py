@@ -12,7 +12,7 @@ from scripts.raster_io import save_array_as_geotiff, clip_tif_by_geojson
 from scripts.fill_depressions import priority_flood_fill
 from scripts.resolve_flats import resolve_flats_barnes_2014
 
-from scripts.flow_direction_quinn_1991 import compute_flow_direction_quinn_1991
+from scripts.flow_direction_mfd_quinn_1991 import compute_flow_direction_quinn_1991
 from scripts.flow_direction_d8 import compute_flow_direction_d8
 
 from scripts.flow_accumulation import compute_flow_accumulation_fd8
