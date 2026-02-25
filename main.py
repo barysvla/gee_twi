@@ -3,10 +3,9 @@ import ee
 import geemap
 import numpy as np
 
-from scripts.io_grid import export_dem_and_area_to_arrays
-from scripts.ee_io import push_array_to_ee_geotiff
-from scripts.raster_io import save_array_as_geotiff, clip_tif_by_geojson
-from scripts.ee_export import export_ee_image_to_geotiff, read_geotiff_to_numpy
+from scripts.grid_io import export_dem_and_area_to_arrays, export_ee_image_to_geotiff
+from scripts.numpy_to_ee import push_array_to_ee_geotiff
+from scripts.geotiff_io import save_array_as_geotiff, read_geotiff_to_numpy, clip_tif_by_geojson
 
 from scripts.fill_depressions import priority_flood_fill
 from scripts.resolve_flats import resolve_flats_barnes_2014
