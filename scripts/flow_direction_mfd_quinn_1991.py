@@ -88,7 +88,7 @@ D8_OFFSETS = np.array(
 )
 
 
-def compute_flow_direction_quinn_1991(
+def compute_flow_direction_mfd_quinn_1991(
     dem: np.ndarray,
     transform,
     *,
