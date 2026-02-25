@@ -28,7 +28,7 @@ def run_pipeline(
     geometry: ee.Geometry = None,                # ORIGINAL, UNBUFFERED ROI (for clipping)
     accum_geometry: ee.Geometry = None,          # BUFFERED ROI FOR ACCUMULATION (optional; falls back to geometry)
     dem_source: str = "FABDEM",
-    flow_method: str = "quinn_1991",
+    flow_method: str = "mfd_quinn_1991",
     use_bucket: bool = False,
 ) -> dict:
     """
