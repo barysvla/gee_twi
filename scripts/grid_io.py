@@ -7,7 +7,6 @@ import tempfile
 from typing import Any, Dict, Optional, Union
 
 import ee
-import geemap
 import numpy as np
 import rasterio
 
