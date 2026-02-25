@@ -1,18 +1,13 @@
-# ee_io.py
+# numpy_to_ee.py
 from __future__ import annotations
 
 import os
-import re
 import time
 import tempfile
-from typing import Any, Dict, Optional
+from typing import Dict, Optional
 
-import contextlib
-import io
-import logging
 import numpy as np
 import ee
-import geemap
 import rasterio
 from google.cloud import storage
 from google.api_core.exceptions import NotFound, Forbidden, Conflict, BadRequest
