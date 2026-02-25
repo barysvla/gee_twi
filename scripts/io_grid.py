@@ -7,7 +7,7 @@ import tempfile
 from typing import Any, Dict, Optional, Union
 
 import ee
-import geemap  # kept because callers may rely on geemap initialization; safe to remove if unused elsewhere
+import geemap
 import numpy as np
 import rasterio
 
