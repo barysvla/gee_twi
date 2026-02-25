@@ -215,3 +215,53 @@ def clip_tif_by_geojson(
                 dst.write_mask(valid.astype("uint8") * 255)
 
     return output_tif
+
+
+def read_geotiff_to_numpy(
+    tif_path: str,
+    *,
+    nodata_mask: np.ndarray | None = None,
+    as_float32: bool = True,
+) -> np.ndarray:
+    """
+    Read a single-band GeoTIFF into a NumPy array and normalize NoData to NaN.
+
+    Parameters
+    ----------
+    tif_path : str
+        Path to the GeoTIFF.
+    nodata_mask : np.ndarray or None
+        Optional boolean mask (True = NoData) applied after reading.
+        This is typically the DEM NoData mask used to enforce consistency.
+    as_float32 : bool
+        If True, returns float32; otherwise preserves rasterio dtype (except NaN normalization,
+        which requires float).
+
+    Returns
+    -------
+    np.ndarray
+        (H, W) array with NoData represented as NaN.
+    """
+    with rasterio.open(tif_path) as src:
+        arr = src.read(1)
+        nodata_val = src.nodata
+
+    # Promote to float for NaN support
+    if as_float32:
+        arr = arr.astype(np.float32)
+    else:
+        if not np.issubdtype(arr.dtype, np.floating):
+            arr = arr.astype(np.float32)
+
+    # Normalize source nodata to NaN
+    if nodata_val is not None:
+        arr = np.where(np.isclose(arr, nodata_val), np.nan, arr)
+
+    # Normalize non-finite values to NaN
+    arr = np.where(np.isfinite(arr), arr, np.nan)
+
+    # Apply external nodata mask (e.g., DEM mask)
+    if nodata_mask is not None:
+        arr = np.where(np.asarray(nodata_mask, dtype=bool), np.nan, arr)
+
+    return arr
