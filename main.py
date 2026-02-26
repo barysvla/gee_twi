@@ -331,18 +331,18 @@ def run_pipeline(
             filename="twi.tif", band_name="TWI"
         )
 
+        geometry_wgs84 = geometry.getInfo()
+        
+        acc_km2_clipped = clip_tif_by_geojson(geotiff_acc_km2, geometry_wgs84, "acc_km2_clipped.tif", band_name="Flow accumulation (km2)")
+        acc_cells_clipped = clip_tif_by_geojson(geotiff_acc_cells, geometry_wgs84, "acc_cells_clipped.tif", band_name="Flow accumulation (cells)")
+        slope_clipped = clip_tif_by_geojson(geotiff_slope, geometry_wgs84, "slope_clipped.tif", band_name="Slope")
+        twi_clipped = clip_tif_by_geojson(geotiff_twi, geometry_wgs84, "twi_clipped.tif", band_name="TWI")
+        
         # Export MERIT Hydro (flow accumulation - upa) to GeoTIFF
         geotiff_merit_upa = export_ee_image_to_geotiff(MERIT_flow_accumulation_upa_grid, out_path="merit_upa.tif", grid=grid, quiet=True)
 
         # Export CTI reference to aligned GeoTIFF
         geotiff_cti = export_ee_image_to_geotiff(cti_grid, out_path="cti.tif", grid=grid, quiet=True)
-
-        geometry_wgs84 = geometry.getInfo()
-    
-        acc_km2_clipped = clip_tif_by_geojson(geotiff_acc_km2, geometry_wgs84, "acc_km2_clipped.tif", band_name="Flow accumulation (km2)")
-        acc_cells_clipped = clip_tif_by_geojson(geotiff_acc_cells, geometry_wgs84, "acc_cells_clipped.tif", band_name="Flow accumulation (cells)")
-        slope_clipped = clip_tif_by_geojson(geotiff_slope, geometry_wgs84, "slope_clipped.tif", band_name="Slope")
-        twi_clipped = clip_tif_by_geojson(geotiff_twi, geometry_wgs84, "twi_clipped.tif", band_name="TWI")
 
         # Plot TWI as a static figure from the clipped GeoTIFF
         print("🖼 Plotting TWI (local mode, percentile stretch)…")
