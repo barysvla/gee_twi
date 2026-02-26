@@ -306,8 +306,6 @@ def run_pipeline(
         twi_np = compute_twi_numpy(
             acc_np=acc_km2,
             slope_deg_np=slope_np,
-            acc_is_area=True,
-            acc_units="km2",
             min_slope_deg=0.1,
             nodata_mask=nodata_mask,
             out_dtype="float32",
