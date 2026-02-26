@@ -93,7 +93,32 @@ def run_pipeline(
     ee_dem_grid       = grid["ee_dem_grid"]           # DEM (Earth Engine grid-locked)
 
     scale = ee.Number(ee_dem_grid.projection().nominalScale())
-    # print("nominalScale [m]:", scale.getInfo())
+
+    # -------------------------------------------------------------------------
+    # Reference layers (optional): used only for validation / visual comparison.
+    # They are reprojected to the pipeline grid (ee_dem_grid) to ensure pixel-wise
+    # alignment with computed outputs, and clipped to the unbuffered ROI (geometry).
+    # -------------------------------------------------------------------------
+    # MERIT Hydro UPA (Upstream/Contributing Area) as a flow-accumulation reference
+    MERIT_flow_accumulation_upa_grid = (
+        ee.Image("MERIT/Hydro/v1_0_1")
+        .select("upa")
+        .reproject(ee_dem_grid.projection())
+        .rename("MERIT_flow_accumulation_upa")
+    )
+    MERIT_flow_accumulation_upa = MERIT_flow_accumulation_upa_grid.clip(geometry)
+
+    # Hydrography90 CTI reference (scaled + grid-aligned)
+    cti_ic = ee.ImageCollection("projects/sat-io/open-datasets/HYDROGRAPHY90/flow_index/cti")   
+    cti_grid = (
+            cti_ic.mosaic()
+            .toFloat()
+            .divide(ee.Number(1e8))
+            .translate(0, scale.multiply(-1)) # Shift the raster down by 1 pixel (negative Y direction)
+            .reproject(ee_dem_grid.projection()) # Re-apply the DEM grid's projection to align with other layers
+            .rename("CTI")
+        )
+    cti = cti_grid.clip(geometry)
 
     # --- Hydrologic conditioning (client-side arrays) ---
     dem_filled = priority_flood_fill(
@@ -166,27 +191,6 @@ def run_pipeline(
     slope_grid = ee.Terrain.slope(ee_dem_grid).toFloat().rename("Slope")
     slope = slope_grid.clip(geometry)
     print("✅ Slope computed.")
-    
-    # MERIT Hydro - flow accumulation reference
-    MERIT_flow_accumulation_upa_grid = (
-        ee.Image("MERIT/Hydro/v1_0_1")
-        .select("upa")
-        .reproject(ee_dem_grid.projection())
-        .rename("MERIT_flow_accumulation_upa")
-    )
-    MERIT_flow_accumulation_upa = MERIT_flow_accumulation_upa_grid.clip(geometry)
-
-    # CTI reference
-    cti_ic = ee.ImageCollection("projects/sat-io/open-datasets/HYDROGRAPHY90/flow_index/cti")   
-    cti_grid = (
-            cti_ic.mosaic()
-            .toFloat()
-            .divide(ee.Number(1e8))
-            .translate(0, scale.multiply(-1)) # Shift the raster down by 1 pixel (negative Y direction)
-            .reproject(ee_dem_grid.projection()) # Re-apply the DEM grid's projection to align with other layers
-            .rename("CTI")
-        )
-    cti = cti_grid.clip(geometry)
 
     # Branch: cloud mode vs local mode
     if use_bucket:
