@@ -31,79 +31,58 @@ def compute_twi_numpy(
     acc_np: np.ndarray,
     slope_deg_np: np.ndarray,
     *,
-    acc_is_area: bool,
-    acc_units: Literal["m2", "km2"] = "m2",
-    cell_area: Optional[float | np.ndarray] = None,
     min_slope_deg: float = 0.1,
-    min_tan: float = 1e-6,
     nodata_mask: Optional[np.ndarray] = None,
     out_dtype: str = "float32",
 ) -> np.ndarray:
     """
-    Compute TWI from NumPy arrays on a shared grid.
+    Compute TWI from NumPy arrays: TWI = ln( A / tan(beta) )
 
-    Notes:
-    - slope is in degrees
-    - if acc_is_area=True, acc_np is contributing area (m² or km² via acc_units)
-    - NoData is returned as NaN
+    Parameters
+    ----------
+    acc_np : np.ndarray
+        Contributing area / accumulation raster on the target grid (must be same grid as slope).
+        Units must already be consistent with your chosen TWI definition.
+    slope_deg_np : np.ndarray
+        Slope raster in degrees on the same grid.
+    min_slope_deg : float
+        Minimum slope (degrees) used to avoid tan(0).
+    nodata_mask : np.ndarray or None
+        Optional boolean mask (True = NoData). Masked cells are set to NaN.
+    out_dtype : str
+        Output dtype, default "float32".
+
+    Returns
+    -------
+    np.ndarray
+        (H, W) array of TWI with NoData as NaN.
     """
-    # Use float64 for numerical stability during log/tan operations
     acc = np.asarray(acc_np, dtype=np.float64)
     slope_deg = np.asarray(slope_deg_np, dtype=np.float64)
 
-    # Basic shape validation (both rasters must be on the same grid)
     if acc.shape != slope_deg.shape:
         raise ValueError(f"Shape mismatch: acc {acc.shape} vs slope {slope_deg.shape}")
 
-    # Build/validate NoData mask
-    if nodata_mask is None:
-        mask = np.zeros(acc.shape, dtype=bool)
-    else:
-        mask = np.asarray(nodata_mask, dtype=bool)
-        if mask.shape != acc.shape:
+    # Start with invalid where inputs are non-finite
+    invalid = ~np.isfinite(acc) | ~np.isfinite(slope_deg)
+
+    # Optional external NoData mask
+    if nodata_mask is not None:
+        m = np.asarray(nodata_mask, dtype=bool)
+        if m.shape != acc.shape:
             raise ValueError("nodata_mask must have the same shape as inputs")
+        invalid |= m
 
-    # Treat any non-finite inputs as NoData
-    mask |= ~np.isfinite(acc) | ~np.isfinite(slope_deg)
-
-    # Convert accumulation to contributing area 'a' in m²:
-    # - either already an area raster (m² / km²)
-    # - or cell-count accumulation converted by cell_area (scalar or per-cell raster)
-    if acc_is_area:
-        a = acc.copy()
-        # if acc_units == "km2":
-        #     a *= 1e6
-        # elif acc_units != "m2":
-        #     raise ValueError(f"Unsupported acc_units: {acc_units}")
-    else:
-        if cell_area is None:
-            raise ValueError("cell_area must be provided when acc_is_area=False")
-
-        # Support scalar cell area or per-cell area raster
-        if np.isscalar(cell_area):
-            a = acc * float(cell_area)
-        else:
-            ca = np.asarray(cell_area, dtype=np.float64)
-            if ca.shape != acc.shape:
-                raise ValueError("cell_area array must match input shape")
-            mask |= ~np.isfinite(ca)
-            a = acc * ca
-
-    # Log argument must be strictly positive
-    mask |= (a <= 0.0)
-
-    # Numerical guard: avoid tan(0) by enforcing a minimum slope in degrees
+    # Numerical guard: enforce minimum slope (degrees)
     slope_deg_safe = np.maximum(slope_deg, float(min_slope_deg))
-    slope_rad = np.deg2rad(slope_deg_safe)
 
-    # Numerical guard: enforce a small positive floor for tan(beta)
-    tan_beta = np.tan(slope_rad)
-    tan_beta = np.maximum(tan_beta, float(min_tan))
-    mask |= ~np.isfinite(tan_beta) | (tan_beta <= 0.0)
+    # tan(beta) where beta in radians
+    tan_slope = np.tan(np.deg2rad(slope_deg_safe))
 
-    # Allocate output and compute only on valid cells
+    # Compute TWI; keep NaN for invalid cells
     twi = np.full(acc.shape, np.nan, dtype=np.float64)
-    valid = ~mask
-    twi[valid] = np.log(a[valid] / tan_beta[valid])
+    valid = ~invalid
+    twi[valid] = np.log(acc[valid] / tan_slope[valid])
 
     return twi.astype(out_dtype, copy=False)
+    
