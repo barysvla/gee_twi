@@ -29,12 +29,8 @@ The workflow integrates:
 
 TWI is defined as:
 
-\[
-\mathrm{TWI} = \ln \left( \frac{a}{\tan \beta} \right)
-\]
+`TWI = ln(a / tan β)`
 
 where  
-\( a \) = upslope contributing area per unit contour width  
-\( \beta \) = slope (radians)
-
-https://colab.research.google.com/github/barysvla/gee_twi/blob/main/notebooks/gee_twi_workflow.ipynb
+- `a` — upslope contributing area per unit contour width  
+- `β` — slope (radians)
