@@ -91,7 +91,7 @@ def run_pipeline(
     nodata_mask       = grid["nodata_mask"]
     crs               = grid["crs"]
     ee_dem_grid       = grid["ee_dem_grid"]           # DEM (Earth Engine grid-locked)
-
+    
     scale = ee.Number(ee_dem_grid.projection().nominalScale())
 
     # -------------------------------------------------------------------------
@@ -270,7 +270,7 @@ def run_pipeline(
         Map.centerObject(geometry, 12)
 
         return {
-            "dem": ee_dem_grid,
+            "dem": ee_dem_grid.clip(geometry),
             
             "mode": "cloud",
             "slope": slope,
@@ -332,7 +332,8 @@ def run_pipeline(
         )
 
         geometry_wgs84 = geometry.getInfo()
-        
+
+        dem_clipped = clip_tif_by_geojson(geotiff_dem, geometry_wgs84, "dem_clipped.tif", band_name="DEM")
         acc_km2_clipped = clip_tif_by_geojson(geotiff_acc_km2, geometry_wgs84, "acc_km2_clipped.tif", band_name="Flow accumulation (km2)")
         acc_cells_clipped = clip_tif_by_geojson(geotiff_acc_cells, geometry_wgs84, "acc_cells_clipped.tif", band_name="Flow accumulation (cells)")
         slope_clipped = clip_tif_by_geojson(geotiff_slope, geometry_wgs84, "slope_clipped.tif", band_name="Slope")
@@ -357,7 +358,7 @@ def run_pipeline(
         # Return metadata and file paths
         return {
             "mode": "local",
-            "dem": geotiff_dem,
+            "dem": dem_clipped,
             "slope": slope_clipped,
             "flow_accumulation_km2": acc_km2_clipped,
             "flow_accumulation_cells": acc_cells_clipped,
