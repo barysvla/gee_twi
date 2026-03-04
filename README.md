@@ -37,7 +37,9 @@ The workflow consists of several sequential steps executed in the Colab notebook
    A global DEM dataset is selected from the available sources (e.g., FABDEM, Copernicus GLO-30, MERIT DEM, SRTM).
 
 4. **Hydrological conditioning of DEM**  
-   The DEM is processed to remove depressions and resolve flat areas to ensure correct surface drainage representation.
+   The DEM is hydrologically conditioned to ensure correct surface drainage representation.  
+   Depressions are filled using the **Priority-Flood algorithm** (Barnes et al., 2014).  
+   Flat areas are then resolved using the **improved flat-resolution method** proposed by Barnes et al. (2015), which constructs a drainage field by superimposing a gradient away from higher terrain with a gradient toward lower terrain. This approach improves flow convergence compared to earlier methods such as Garbrecht and Martz (1997).
 
 5. **Flow routing and accumulation computation**  
    Flow routing is calculated using either the D8 or MFD (Quinn 1991) algorithm, followed by computation of upslope contributing area.
@@ -45,27 +47,18 @@ The workflow consists of several sequential steps executed in the Colab notebook
 6. **Slope and TWI computation**  
    Terrain slope is calculated from the DEM and combined with flow accumulation to compute the Topographic Wetness Index:
 
-   \[
-   TWI = \ln\left(\frac{a}{\tan \beta}\right)
-   \]
-
-   where \(a\) is the upslope contributing area per unit contour length and \(\beta\) is the slope angle.
-
-7. **Visualization and export**  
-   Results are visualized in an interactive Earth Engine map and can be exported as GeoTIFF files either to Google Drive or to local storage.
-
-## Workflow Architecture
-
-The workflow integrates:
-
-- **Google Earth Engine** — data access, server-side raster operations, and visualization  
-- **Google Colab (Python environment)** — workflow orchestration and interactive interface  
-- **NumPy-based algorithms** — hydrological conditioning, flow direction, and flow accumulation
-
-TWI is defined as:
-
 `TWI = ln(a / tan β)`
 
 where  
 - `a` — upslope contributing area per unit contour width  
 - `β` — slope (radians)
+  
+7. **Visualization and export**  
+   Results are visualized in an interactive Earth Engine map and can be exported as GeoTIFF files either to Google Drive or to local storage.
+
+
+## References
+
+Barnes, R., Lehman, C., & Mulla, D. (2014). Priority-Flood: An optimal depression-filling and watershed-labeling algorithm for digital elevation models. *Computers & Geosciences*.
+
+Barnes, R., Lehman, C., & Mulla, D. (2015). An efficient assignment of drainage direction over flat surfaces in raster digital elevation models. *Computers & Geosciences*.
