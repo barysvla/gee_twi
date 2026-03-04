@@ -10,18 +10,6 @@ such as slope, flow accumulation, and TWI.
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/barysvla/gee_twi/blob/main/notebooks/gee_twi_workflow.ipynb)
 
 
-## Features
-
-- Interactive **AOI selection** (draw on map or upload vector file)
-- Support for multiple **global DEM datasets** (30 m and 90 m resolution)
-- **Hydrological conditioning** of DEM (depression filling and flat resolution)
-- Selectable **flow routing algorithms** (D8, MFD – Quinn 1991)
-- Optional **buffer around AOI** to reduce edge effects in accumulation and slope calculation
-- Computation of **flow accumulation**, **slope**, and **Topographic Wetness Index**
-- Optional **reference layers** for comparison (MERIT Hydro UPA, Hydrography90m CTI)
-- Export of outputs as **GeoTIFF** (Google Drive or local download)
-- Interactive **visualization in Google Earth Engine map interface**
-
 ## Workflow overview
 
 The workflow consists of several sequential steps executed in the Colab notebook:
@@ -37,14 +25,12 @@ The workflow consists of several sequential steps executed in the Colab notebook
    A global DEM dataset is selected from the available sources (e.g., FABDEM, Copernicus GLO-30, MERIT DEM, SRTM).
 
 4. **Hydrological conditioning of DEM**  
-   The DEM is hydrologically conditioned to ensure correct surface drainage representation.  
-   Depressions are filled using the **Priority-Flood algorithm** (Barnes et al., 2014).  
-   Flat areas are then resolved using the **improved flat-resolution method** proposed by Barnes et al. (2015), which constructs a drainage field by superimposing a gradient away from higher terrain with a gradient toward lower terrain. This approach improves flow convergence compared to earlier methods such as Garbrecht and Martz (1997).
+   Depressions are filled using **Priority-Flood (Barnes et al., 2014)** and flats are resolved using the method of **Barnes et al. (2015)**.
+   
+6. **Flow routing and accumulation computation**  
+   Flow routing is computed using either the **D8 (single-flow direction)** algorithm or the **multiple-flow direction (MFD)** method proposed by Quinn et al. (1991). The resulting flow distribution is then used to compute the upslope contributing area.
 
-5. **Flow routing and accumulation computation**  
-   Flow routing is calculated using either the D8 or MFD (Quinn 1991) algorithm, followed by computation of upslope contributing area.
-
-6. **Slope and TWI computation**  
+7. **Slope and TWI computation**  
    Terrain slope is calculated from the DEM and combined with flow accumulation to compute the Topographic Wetness Index:
 
 `TWI = ln(a / tan β)`
@@ -62,3 +48,5 @@ where
 Barnes, R., Lehman, C., & Mulla, D. (2014). Priority-Flood: An optimal depression-filling and watershed-labeling algorithm for digital elevation models. *Computers & Geosciences*.
 
 Barnes, R., Lehman, C., & Mulla, D. (2015). An efficient assignment of drainage direction over flat surfaces in raster digital elevation models. *Computers & Geosciences*.
+
+Quinn, P., Beven, K., Chevallier, P., & Planchon, O. (1991). The prediction of hillslope flow paths for distributed hydrological modelling using digital terrain models. *Hydrological Processes*, 5(1), 59–79.
