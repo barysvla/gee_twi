@@ -1,7 +1,7 @@
 # TWI Calculator (Google Earth Engine + Colab)
 
 Interactive workflow for computing the **Topographic Wetness Index (TWI)**
-from global DEM datasets using Google Earth Engine and Google Colab.
+from global DEM datasets using Google Earth Engine (GEE) and Google Colab.
 
 The workflow allows the user to select an area of interest, choose the DEM 
 source and flow routing method, and export terrain-derived outputs 
@@ -16,7 +16,7 @@ Open the notebook in Google Colab using the badge above, save a copy to your Goo
 The workflow consists of several sequential steps executed in the Colab notebook:
 
 1. **Authentication and environment setup**  
-   The user authenticates with Google Earth Engine and provides a Cloud Project ID.  
+   The user authenticates with GEE and provides a Cloud Project ID.  
    The notebook clones the repository and installs required Python dependencies.
 
 2. **Area of Interest (AOI) definition**  
@@ -45,7 +45,7 @@ The workflow consists of several sequential steps executed in the Colab notebook
 
 ## Execution model
 
-The workflow combines **server-side processing in Google Earth Engine (GEE)** with **local computation in the Colab environment**.
+The workflow combines **server-side processing in GEE** with **local computation in the Colab environment**.
 
 The division of computation is as follows:
 
@@ -58,11 +58,11 @@ The division of computation is as follows:
 **Operations executed locally in Colab (NumPy)**
 - export of DEM data from GEE
 - hydrological conditioning of the DEM  
-  (depression filling using Priority-Flood and flat resolution)
-- flow routing and flow accumulation computation (D8 or MFD)
+  (depression filling and flat resolution)
+- flow routing and flow accumulation computation
 - TWI computation in local mode
 
-This hybrid approach is used because some hydrological algorithms rely on iterative topological operations that are difficult to implement efficiently within the Earth Engine raster framework.
+This hybrid approach is used because some hydrological algorithms rely on iterative topological operations that are difficult to implement efficiently within the GEE raster framework.
 
 ## References
 
