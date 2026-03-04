@@ -9,6 +9,7 @@ such as slope, flow accumulation, and TWI.
 
 [![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/barysvla/gee_twi/blob/main/notebooks/gee_twi_workflow.ipynb)
 
+Open the notebook in Google Colab using the badge above, save a copy to your Google Drive, and follow the step-by-step instructions provided directly in the notebook.
 
 ## Workflow overview
 
@@ -42,6 +43,26 @@ The workflow consists of several sequential steps executed in the Colab notebook
 7. **Visualization and export**  
    Results are visualized in an interactive Earth Engine map and can be exported as GeoTIFF files either to Google Drive or to local storage.
 
+## Execution model
+
+The workflow combines **server-side processing in Google Earth Engine (GEE)** with **local computation in the Colab environment**.
+
+The division of computation is as follows:
+
+**Operations executed in Google Earth Engine**
+- loading the selected DEM dataset
+- slope computation using `ee.Terrain.slope`
+- optional cloud-based visualization
+- TWI computation in cloud mode
+
+**Operations executed locally in Colab (NumPy)**
+- export of DEM data from GEE
+- hydrological conditioning of the DEM  
+  (depression filling using Priority-Flood and flat resolution)
+- flow routing and flow accumulation computation (D8 or MFD)
+- TWI computation in local mode
+
+This hybrid approach is used because some hydrological algorithms rely on iterative topological operations that are difficult to implement efficiently within the Earth Engine raster framework.
 
 ## References
 
