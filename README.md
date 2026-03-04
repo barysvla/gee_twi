@@ -21,6 +21,39 @@ such as slope, flow accumulation, and TWI.
 - Optional **reference layers** for comparison (MERIT Hydro UPA, Hydrography90m CTI)
 - Export of outputs as **GeoTIFF** (Google Drive or local download)
 - Interactive **visualization in Google Earth Engine map interface**
+
+## Workflow overview
+
+The workflow consists of several sequential steps executed in the Colab notebook:
+
+1. **Authentication and environment setup**  
+   The user authenticates with Google Earth Engine and provides a Cloud Project ID.  
+   The notebook clones the repository and installs required Python dependencies.
+
+2. **Area of Interest (AOI) definition**  
+   The AOI can be defined by drawing a polygon on the interactive map or by uploading a vector file (GeoJSON, GPKG, KML/KMZ, or Shapefile).
+
+3. **DEM selection**  
+   A global DEM dataset is selected from the available sources (e.g., FABDEM, Copernicus GLO-30, MERIT DEM, SRTM).
+
+4. **Hydrological conditioning of DEM**  
+   The DEM is processed to remove depressions and resolve flat areas to ensure correct surface drainage representation.
+
+5. **Flow routing and accumulation computation**  
+   Flow routing is calculated using either the D8 or MFD (Quinn 1991) algorithm, followed by computation of upslope contributing area.
+
+6. **Slope and TWI computation**  
+   Terrain slope is calculated from the DEM and combined with flow accumulation to compute the Topographic Wetness Index:
+
+   \[
+   TWI = \ln\left(\frac{a}{\tan \beta}\right)
+   \]
+
+   where \(a\) is the upslope contributing area per unit contour length and \(\beta\) is the slope angle.
+
+7. **Visualization and export**  
+   Results are visualized in an interactive Earth Engine map and can be exported as GeoTIFF files either to Google Drive or to local storage.
+
 ## Workflow Architecture
 
 The workflow integrates:
