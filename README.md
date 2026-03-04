@@ -33,11 +33,11 @@ The workflow consists of several sequential steps executed in the Colab notebook
 7. **Slope and TWI computation**  
    Terrain slope is calculated from the DEM and combined with flow accumulation to compute the Topographic Wetness Index:
 
-`TWI = ln(a / tan β)`
-
-where  
-- `a` — upslope contributing area per unit contour width  
-- `β` — slope (radians)
+      `TWI = ln(a / tan β)`
+      
+      where  
+      - `a` — upslope contributing area per unit contour width  
+      - `β` — slope (radians)
   
 7. **Visualization and export**  
    Results are visualized in an interactive Earth Engine map and can be exported as GeoTIFF files either to Google Drive or to local storage.
