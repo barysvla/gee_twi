@@ -11,6 +11,17 @@ such as slope, flow accumulation, and TWI.
 
 Open the notebook in Google Colab using the badge above, save a copy to your Google Drive, and follow the step-by-step instructions provided directly in the notebook.
 
+## Requirements
+
+- Google Earth Engine account
+- Google Cloud Project registered in GEE
+- Enabled APIs:
+  - Google Earth Engine API
+  - Cloud Billing API
+- Billing account (required for cloud execution mode)
+
+Local mode runs without billing.
+
 ## Workflow overview
 
 The workflow consists of several sequential steps executed in the Colab notebook:
