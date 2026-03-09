@@ -16,32 +16,55 @@ def priority_flood_fill(
     return_fill_depth: bool = False,
 ):
     """
-    Priority-Flood (Barnes et al.) depression filling.
-
-    The algorithm:
-    - floods from the raster boundary (and optionally from neighbors of internal NoData islands),
-    - uses a priority queue keyed by the current "water level" (cell elevation),
-    - guarantees that every valid cell has an outlet (no closed depressions remain).
-
+    Priority-Flood depression filling algorithm.
+    
+    This function implements the basic Priority-Flood algorithm for
+    removal of closed depressions in a digital elevation model (DEM),
+    as described by Barnes, Lehman and Mulla (2014). The implementation
+    follows the logic of the reference C++ implementation
+    `original_priority_flood` provided by the authors and corresponds
+    to the basic variant of the algorithm (Algorithm 1), which uses a
+    single priority queue.
+    
+    The algorithm floods the DEM inward from the raster boundary.
+    Cells are processed in order of increasing elevation using a
+    priority queue. If a neighbouring cell lies below the current
+    water level, its elevation is raised to ensure that every valid
+    cell has a descending path towards the boundary and no closed
+    depressions remain.
+    
+    This implementation additionally supports optional seeding of
+    cells adjacent to internal NoData regions so that masked areas
+    can act as potential outlets when working with real-world DEMs.
+    
+    Reference
+    ---------
+    Barnes, R., Lehman, C., Mulla, D. (2014).
+    Priority-Flood: An optimal depression-filling and watershed-labeling
+    algorithm for digital elevation models.
+    Computers & Geosciences, 62, 117–127.
+    https://doi.org/10.1016/j.cageo.2013.04.024
+    
     Parameters
     ----------
     dem : np.ndarray
-        2D DEM array (float-like).
+        2D array representing DEM elevations.
     nodata : float
-        NoData marker; use np.nan if NoData is represented as NaN.
+        NoData marker. Use np.nan if missing data are stored as NaN.
     seed_internal_nodata_as_outlet : bool
-        If True, treat internal NoData regions as potential outlets by seeding their valid neighbors.
-        This is robust for real DEMs with masks/gaps.
+        If True, cells adjacent to internal NoData regions are treated
+        as potential outlets and are seeded into the priority queue.
     return_fill_depth : bool
-        If True, also return per-cell fill depth (filled - original).
-
+        If True, also return the per-cell fill depth (filled minus original elevation).
+    
     Returns
     -------
     dem_filled : np.ndarray
-        Depression-filled DEM (float64), with NoData preserved.
+        Depression-filled DEM with NoData preserved.
     fill_depth : np.ndarray, optional
-        Fill depth per cell (float64). Returned only if return_fill_depth=True.
+        Fill depth per cell. Returned only if return_fill_depth=True.
     """
+    
     dem_values = np.asarray(dem, dtype=np.float64)
     if dem_values.ndim != 2:
         raise ValueError("DEM must be a 2D array.")
