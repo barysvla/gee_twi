@@ -1,7 +1,7 @@
 import heapq
 import numpy as np
 
-# Neighbor offsets for a full 3x3 neighborhood (including diagonals)
+# D8 neighbourhood offsets used for raster traversal.
 NEIGHBOR_OFFSETS_8 = [
     (-1, -1), (-1, 0), (-1, 1),
     (0, -1),           (0, 1),
@@ -17,7 +17,7 @@ def priority_flood_fill(
 ):
     """
     Priority-Flood depression filling algorithm.
-    
+
     This function implements the basic Priority-Flood algorithm for
     removal of closed depressions in a digital elevation model (DEM),
     as described by Barnes, Lehman and Mulla (2014). The implementation
@@ -25,18 +25,17 @@ def priority_flood_fill(
     `original_priority_flood` provided by the authors and corresponds
     to the basic variant of the algorithm (Algorithm 1), which uses a
     single priority queue.
-    
+
     The algorithm floods the DEM inward from the raster boundary.
     Cells are processed in order of increasing elevation using a
     priority queue. If a neighbouring cell lies below the current
-    water level, its elevation is raised to ensure that every valid
-    cell has a descending path towards the boundary and no closed
-    depressions remain.
-    
+    spill elevation, its value is raised so that every valid cell
+    has an outlet and no closed depressions remain.
+
     This implementation additionally supports optional seeding of
     cells adjacent to internal NoData regions so that masked areas
     can act as potential outlets when working with real-world DEMs.
-    
+
     Reference
     ---------
     Barnes, R., Lehman, C., Mulla, D. (2014).
@@ -44,7 +43,7 @@ def priority_flood_fill(
     algorithm for digital elevation models.
     Computers & Geosciences, 62, 117–127.
     https://doi.org/10.1016/j.cageo.2013.04.024
-    
+
     Parameters
     ----------
     dem : np.ndarray
@@ -56,7 +55,7 @@ def priority_flood_fill(
         as potential outlets and are seeded into the priority queue.
     return_fill_depth : bool
         If True, also return the per-cell fill depth (filled minus original elevation).
-    
+
     Returns
     -------
     dem_filled : np.ndarray
@@ -64,14 +63,14 @@ def priority_flood_fill(
     fill_depth : np.ndarray, optional
         Fill depth per cell. Returned only if return_fill_depth=True.
     """
-    
+
     dem_values = np.asarray(dem, dtype=np.float64)
     if dem_values.ndim != 2:
         raise ValueError("DEM must be a 2D array.")
 
     n_rows, n_cols = dem_values.shape
 
-    # Valid-data mask
+    # Identify cells that participate in the hydrologic correction.
     if np.isnan(nodata):
         valid_mask = np.isfinite(dem_values)
     else:
@@ -79,12 +78,12 @@ def priority_flood_fill(
 
     dem_filled = dem_values.copy()
     visited_mask = np.zeros_like(valid_mask, dtype=bool)
-    priority_queue = []  # entries: (elevation, row, col)
+    priority_queue = []  # Heap entries are stored as (elevation, row, col).
 
     def in_bounds(r: int, c: int) -> bool:
         return 0 <= r < n_rows and 0 <= c < n_cols
 
-    # 1) Seed: all valid border cells of the raster (natural outlets)
+    # Seed valid raster-edge cells, which act as natural outlets.
     for c in range(n_cols):
         if valid_mask[0, c] and not visited_mask[0, c]:
             heapq.heappush(priority_queue, (dem_filled[0, c], 0, c))
@@ -101,7 +100,7 @@ def priority_flood_fill(
             heapq.heappush(priority_queue, (dem_filled[r, n_cols - 1], r, n_cols - 1))
             visited_mask[r, n_cols - 1] = True
 
-    # 2) Optional seed: valid cells adjacent to NoData (treat internal NoData as outlets)
+    # Optionally treat cells adjacent to internal NoData regions as additional outlets.
     if seed_internal_nodata_as_outlet:
         for r in range(n_rows):
             for c in range(n_cols):
@@ -110,13 +109,12 @@ def priority_flood_fill(
 
                 for dr, dc in NEIGHBOR_OFFSETS_8:
                     rr, cc = r + dr, c + dc
-                    # Neighbor outside raster OR neighbor is NoData -> seed this cell
                     if (not in_bounds(rr, cc)) or (not valid_mask[rr, cc]):
                         heapq.heappush(priority_queue, (dem_filled[r, c], r, c))
                         visited_mask[r, c] = True
                         break
 
-    # 3) Main loop: always expand from the currently lowest water level
+    # Propagate inward from the lowest queued cell and fill depressions as needed.
     while priority_queue:
         water_level, r, c = heapq.heappop(priority_queue)
 
@@ -127,13 +125,13 @@ def priority_flood_fill(
 
             visited_mask[rr, cc] = True
 
-            # Raise neighbor if it lies below the current water level
+            # Enforce that newly reached cells are not lower than the current spill elevation.
             if dem_filled[rr, cc] < water_level:
                 dem_filled[rr, cc] = water_level
 
             heapq.heappush(priority_queue, (dem_filled[rr, cc], rr, cc))
 
-    # Preserve NoData values
+    # Restore the original NoData mask in the output raster.
     if np.isnan(nodata):
         dem_filled[~valid_mask] = np.nan
     else:
@@ -149,3 +147,4 @@ def priority_flood_fill(
         fill_depth[~valid_mask] = 0.0
 
     return dem_filled, fill_depth
+    
