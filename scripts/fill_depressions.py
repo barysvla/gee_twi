@@ -36,14 +36,6 @@ def priority_flood_fill(
     cells adjacent to internal NoData regions so that masked areas
     can act as potential outlets when working with real-world DEMs.
 
-    Reference
-    ---------
-    Barnes, R., Lehman, C., Mulla, D. (2014).
-    Priority-Flood: An optimal depression-filling and watershed-labeling
-    algorithm for digital elevation models.
-    Computers & Geosciences, 62, 117–127.
-    https://doi.org/10.1016/j.cageo.2013.04.024
-
     Parameters
     ----------
     dem : np.ndarray
@@ -62,6 +54,13 @@ def priority_flood_fill(
         Depression-filled DEM with NoData preserved.
     fill_depth : np.ndarray, optional
         Fill depth per cell. Returned only if return_fill_depth=True.
+
+    Reference
+    ---------
+    Barnes, R., Lehman, C., Mulla, D. (2014).
+    Priority-Flood: An optimal depression-filling and watershed-labeling
+    algorithm for digital elevation models.
+    Computers & Geosciences, 62, 117–127.
     """
 
     dem_values = np.asarray(dem, dtype=np.float64)
