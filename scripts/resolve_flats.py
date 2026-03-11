@@ -71,14 +71,6 @@ def resolve_flats_barnes_2014(
     configurable elevation tolerances, explicit handling of raster-edge
     drainage, and optional epsilon-based DEM modification.
 
-    Reference
-    ---------
-    Barnes, R., Lehman, C., Mulla, D. (2014).
-    An efficient assignment of drainage direction over flat surfaces in raster
-    digital elevation models.
-    Computers & Geosciences, 62, 128–135.
-    https://doi.org/10.1016/j.cageo.2013.01.009
-
     Parameters
     ----------
     dem : np.ndarray
@@ -116,6 +108,13 @@ def resolve_flats_barnes_2014(
         and `NOFLOW_DIR`.
     stats : dict
         Diagnostic counters describing identified and resolved flats.
+
+    Reference
+    ---------
+    Barnes, R., Lehman, C., Mulla, D. (2014).
+    An efficient assignment of drainage direction over flat surfaces in raster
+    digital elevation models.
+    Computers & Geosciences, 62, 128–135.
     """
     dem_values = np.asarray(dem, dtype=np.float64)
     if dem_values.ndim != 2:
