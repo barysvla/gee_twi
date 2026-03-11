@@ -130,6 +130,12 @@ def compute_flow_direction_mfd_quinn_1991(
     flow_weights : np.ndarray
         Array of shape (H, W, 8) with float32 weights for directions [NE, E, SE, S, SW, W, NW, N].
         Weights sum to 1 for cells with at least one downslope neighbor; otherwise all zeros.
+
+    References
+    ----------
+    Quinn, P., Beven, K., Chevallier, P., & Planchon, O. (1991). 
+    The prediction of hillslope flow paths for distributed hydrological modelling
+    using digital terrain models. Hydrological Processes, 5(1), 59–79. 
     """
     z = np.asarray(dem, dtype=np.float64)
     height, width = z.shape
