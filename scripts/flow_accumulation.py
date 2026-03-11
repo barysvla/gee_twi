@@ -26,12 +26,14 @@ def compute_flow_accumulation(
     """
     Compute flow accumulation for D8 and FD8/MFD routing schemes.
 
-    The function propagates per-cell contributions through a directed,
-    acyclic flow network derived either from a single-flow (D8) direction
-    raster or from a multi-flow (FD8/MFD) weight tensor. Cells are processed
-    progressively from locations without upstream inflow toward downstream
-    cells, ensuring that each cell is evaluated only after all of its
-    contributing neighbors have been resolved.
+    The algorithm follows a topological dependency-based approach:
+    cells are processed from locations without upstream inflow toward
+    downstream cells, so that each cell is evaluated only after all of
+    its contributing neighbors have been resolved. This principle is
+    consistent with flow-network traversal derived from O'Callaghan &
+    Mark (1984) and with later implementation-oriented formulations
+    such as Barták (2008). In the multi-flow case, accumulated
+    contributions are distributed according to routing weights.
 
     Exactly one of `dir_idx` or `flow_weights` must be provided.
 
@@ -40,14 +42,14 @@ def compute_flow_accumulation(
     dir_idx : ndarray of shape (H, W), optional
         D8 flow direction indices. Encoding:
             0..7  = [NE, E, SE, S, SW, W, NW, N]
-            -1    = no outflow (sink/outlet) or NoData (depending on nodata_mask).
+            -1    = no defined outflow (sink, outlet, or NoData depending on nodata_mask)
         If `nodata_mask` is None, values < 0 are conservatively treated as NoData.
 
     flow_weights : ndarray of shape (H, W, 8), optional
         Multi-flow (FD8/MFD) routing weights to D8 neighbors in the order
         [NE, E, SE, S, SW, W, NW, N].
         All weights must be non-negative. For cells with outflow,
-        weights are expected to sum to 1.
+        weights are typically expected to sum to 1.
 
     nodata_mask : ndarray of shape (H, W), optional
         Boolean mask indicating invalid cells (True = NoData).
@@ -69,15 +71,26 @@ def compute_flow_accumulation(
             "km2"    – contributing area in square kilometers
 
     cycle_check : bool, default=True
-        If True, verifies that the flow network is acyclic by comparing
-        the number of processed cells with the number of valid cells.
-        Raises RuntimeError if a cycle is detected, which usually indicates
-        unresolved flats, depressions, or incorrect hydrological conditioning.
+        If True, verifies that all valid cells were processed. A mismatch usually
+        indicates a cycle in the flow graph caused by unresolved flats,
+        depressions, or incorrect hydrological conditioning.
 
     Returns
     -------
     acc : ndarray of shape (H, W), dtype float32
         Flow accumulation raster in the requested units.
+        Cells marked as NoData contain value 0.
+
+    References
+    ----------
+    O'Callaghan, J. F., & Mark, D. M. (1984).
+    The extraction of drainage networks from digital elevation data.
+    Computer Vision, Graphics, and Image Processing, 28(3), 323–344.
+    
+    Barták, V. (2008).
+    Algoritmy pro zpracování digitálních modelů terénu s aplikacemi
+    v hydrologickém modelování. Diplomová práce, Česká zemědělská
+    univerzita v Praze.
     """
 
     # -------------------------------------------------------------------------
