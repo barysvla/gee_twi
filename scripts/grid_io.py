@@ -253,7 +253,6 @@ def export_ee_image_to_geotiff(
         scale_m = grid.get("scale_m", None)
         if scale_m is None:
             raise KeyError("grid must contain 'scale_m' when projection_info.transform is None")
-        # FIX: v režimu exportu přes 'scale' explicitně nastav i CRS
         export_kwargs["crs"] = crs_str
         export_kwargs["scale"] = float(scale_m)
 
