@@ -15,7 +15,7 @@ D8_OFFSETS: list[tuple[int, int]] = [
 ]
 
 
-def compute_flow_accumulation(
+def flow_acc(
     *,
     dir_idx: np.ndarray | None = None,
     flow_weights: np.ndarray | None = None,
