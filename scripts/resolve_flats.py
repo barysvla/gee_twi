@@ -6,7 +6,7 @@ from typing import Deque, Dict, List, Optional, Tuple
 import numpy as np
 
 # D8 neighbourhood offsets.
-# The order must remain consistent because the index is used as the encoded
+# The order is fixed because the index is used as the encoded
 # flow-direction value (0..7).
 NEIGHBOR_OFFSETS_8: List[Tuple[int, int]] = [
     (-1, -1), (-1, 0), (-1, 1),
@@ -18,7 +18,7 @@ NEIGHBOR_OFFSETS_8: List[Tuple[int, int]] = [
 NODATA_DIR: int = -1
 NOFLOW_DIR: int = -2
 
-# Queue marker used to separate breadth-first expansion layers.
+# Queue marker separating breadth-first expansion levels.
 QUEUE_MARKER: Tuple[int, int] = (-1, -1)
 
 
@@ -26,10 +26,12 @@ def _deduplicate_queue(q: Deque[Tuple[int, int]]) -> Deque[Tuple[int, int]]:
     """Return a queue with duplicate coordinates removed while preserving order."""
     seen = set()
     out: Deque[Tuple[int, int]] = deque()
+
     for item in q:
         if item not in seen:
             seen.add(item)
             out.append(item)
+
     return out
 
 
@@ -46,37 +48,49 @@ def resolve_flats_barnes_2014(
     """
     Resolve drainable flat areas in a raster DEM following Barnes et al. (2014).
 
-    This implementation follows the logic and main computational steps of the
-    flat-resolution procedure described by Barnes, Lehman, and Mulla (2014).
-    It constructs an auxiliary integer mask (`flat_mask`) that enforces a
-    unique drainage pattern over drainable flats without iterative correction.
+    This implementation follows the main logic of the flat-resolution
+    procedure described by Barnes, Lehman, and Mulla (2014). It constructs
+    an auxiliary integer mask (`flat_mask`) that imposes a unique drainage
+    pattern over drainable flats without iterative DEM correction.
 
-    The method proceeds as follows:
-    1. Initial D8 flow directions are computed and cells without a strictly
-       lower neighbour are marked as `NOFLOW_DIR`.
-    2. Flat boundary cells adjacent to higher terrain (`high_edges`) and to
-       lower terrain (`low_edges`) are identified.
-    3. Each drainable flat is labeled by flood-filling connected cells of
-       equal elevation.
-    4. A breadth-first expansion from `high_edges` builds a gradient away from
-       higher terrain.
-    5. A breadth-first expansion from `low_edges` builds a gradient towards
-       lower terrain and combines it with the previous gradient, assigning
-       double weight to the towards-lower component.
-    6. Flow directions are reassigned for labeled flat cells that were
-       previously marked as `NOFLOW_DIR`.
+    The procedure consists of the following steps:
 
-    Compared with the reference C++/RichDEM implementation, this version
-    includes several practical adaptations for NumPy-based raster processing:
-    configurable elevation tolerances, explicit handling of raster-edge
-    drainage, and optional epsilon-based DEM modification.
+    Step 0
+        Compute initial D8 flow directions. Cells without a strictly lower
+        neighbour are marked as `NOFLOW_DIR`.
+
+    Step 1
+        Identify flat boundary cells adjacent to higher terrain
+        (`high_edges`) and to lower terrain (`low_edges`).
+
+    Step 1b
+        Label each drainable flat by flood-filling connected cells of equal
+        elevation.
+
+    Step 2
+        Build a gradient away from higher terrain by breadth-first expansion
+        from `high_edges`.
+
+    Step 3
+        Build a gradient towards lower terrain by breadth-first expansion
+        from `low_edges` and combine both gradients, assigning double weight
+        to the towards-lower component.
+
+    Step 4
+        Reassign flow directions for labeled flat cells previously marked as
+        `NOFLOW_DIR`.
+
+    Relative to the reference C++/RichDEM implementation, this version adds
+    support for configurable elevation tolerances, explicit handling of
+    raster-edge drainage, and optional epsilon-based DEM modification.
 
     Parameters
     ----------
     dem : np.ndarray
         Two-dimensional DEM array.
     nodata : float, default=np.nan
-        NoData marker. If set to NaN, all non-finite values are treated as invalid.
+        NoData marker. If set to NaN, all non-finite values are treated as
+        invalid.
     equal_tol : float, default=0.0
         Absolute tolerance used when comparing elevations for flat membership
         and equal-elevation edge detection.
@@ -84,9 +98,8 @@ def resolve_flats_barnes_2014(
         Minimum required elevation drop for a neighbour to be considered
         strictly lower.
     treat_oob_as_lower : bool, default=True
-        If True, raster-edge cells are treated as draining outward even if
-        no strictly lower in-bounds neighbour exists. This is a practical
-        adaptation for finite raster domains.
+        If True, raster-edge cells are treated as draining outward when no
+        strictly lower in-bounds neighbour exists.
     apply_to_dem : {"none", "epsilon"}, default="none"
         Optional DEM modification mode. The standard workflow keeps the DEM
         unchanged and uses only `flat_mask` and `flowdirs`. If set to
@@ -128,19 +141,23 @@ def resolve_flats_barnes_2014(
         valid = np.isfinite(dem_values) & (dem_values != nodata)
 
     def in_bounds(r: int, c: int) -> bool:
+        """Return True if the cell lies inside the raster extent."""
         return 0 <= r < n_rows and 0 <= c < n_cols
 
     def is_equal(a: float, b: float) -> bool:
+        """Return True if two elevations are equal within `equal_tol`."""
         return abs(a - b) <= equal_tol
 
     def is_strictly_lower(z_here: float, z_nbr: float) -> bool:
+        """Return True if the neighbour is lower by more than `lower_tol`."""
         return (z_nbr - z_here) < -lower_tol
 
     def is_edge_cell(r: int, c: int) -> bool:
+        """Return True if the cell lies on the raster boundary."""
         return r == 0 or c == 0 or r == n_rows - 1 or c == n_cols - 1
 
     # ---------------------------------------------------------------------
-    # Step 0: Initial D8 flow directions
+    # Step 0: Compute initial D8 flow directions
     # ---------------------------------------------------------------------
     flowdirs = np.full((n_rows, n_cols), NODATA_DIR, dtype=np.int16)
 
@@ -152,9 +169,8 @@ def resolve_flats_barnes_2014(
             z0 = dem_values[r, c]
 
             if treat_oob_as_lower and is_edge_cell(r, c):
-                # Prefer a real downslope neighbour when available.
-                # Otherwise mark the edge cell as flow-defined, representing
-                # outward drainage from the raster domain.
+                # Assign a real downslope neighbour when present.
+                # Otherwise represent outward drainage from the raster edge.
                 best_dir: Optional[int] = None
                 best_z = z0
 
@@ -204,7 +220,7 @@ def resolve_flats_barnes_2014(
                 if not in_bounds(nr, nc) or not valid[nr, nc]:
                     continue
 
-                # Low edge: a flow-defined cell touching an equal-elevation
+                # Low edge: a flow-defined cell adjacent to an equal-elevation
                 # cell with no local downslope.
                 if (
                     flowdirs[r, c] != NOFLOW_DIR
@@ -214,7 +230,7 @@ def resolve_flats_barnes_2014(
                     low_edges.append((r, c))
                     break
 
-                # High edge: a NOFLOW cell touching any higher neighbour.
+                # High edge: a NOFLOW cell adjacent to higher terrain.
                 if flowdirs[r, c] == NOFLOW_DIR and (dem_values[nr, nc] - z0) > equal_tol:
                     high_edges.append((r, c))
                     break
@@ -270,9 +286,8 @@ def resolve_flats_barnes_2014(
             for dr, dc in NEIGHBOR_OFFSETS_8:
                 to_fill.append((r + dr, c + dc))
 
-    # Keep only high-edge cells belonging to labeled drainable flats.
-    # If a cell is present in both low_edges and high_edges, low-edge status
-    # takes precedence and the cell is excluded from the away-from-higher step.
+    # Retain only high-edge cells belonging to labeled drainable flats.
+    # If a cell appears in both edge sets, low-edge status takes precedence.
     low_edge_set = set(low_edges)
 
     high_edges_filtered: Deque[Tuple[int, int]] = deque()
@@ -281,12 +296,14 @@ def resolve_flats_barnes_2014(
 
     for rc in high_edges:
         r, c = rc
+
         if labels[r, c] == 0:
             removed_unlabeled += 1
             continue
         if rc in low_edge_set:
             removed_low_dominates += 1
             continue
+
         high_edges_filtered.append(rc)
 
     high_edges = high_edges_filtered
@@ -326,10 +343,11 @@ def resolve_flats_barnes_2014(
                 continue
             if flowdirs[nr, nc] != NOFLOW_DIR:
                 continue
+
             q.append((nr, nc))
 
     # ---------------------------------------------------------------------
-    # Step 3: Build gradient towards lower terrain and combine both gradients
+    # Step 3: Build gradient towards lower terrain and combine gradients
     # ---------------------------------------------------------------------
     flat_mask = -flat_mask
 
@@ -363,10 +381,11 @@ def resolve_flats_barnes_2014(
                 continue
             if flowdirs[nr, nc] != NOFLOW_DIR:
                 continue
+
             q.append((nr, nc))
 
     # ---------------------------------------------------------------------
-    # Step 4: Reassign flow directions within labeled flats using flat_mask
+    # Step 4: Reassign flow directions within labeled flats
     # ---------------------------------------------------------------------
     for r in range(n_rows):
         for c in range(n_cols):
@@ -402,8 +421,8 @@ def resolve_flats_barnes_2014(
                     and (best_dir % 2 == 1)
                     and (k % 2 == 0)
                 ):
-                    # Prefer a diagonal direction in tie cases to better match
-                    # the reference implementation behaviour.
+                    # In tie cases, prefer a diagonal direction to maintain
+                    # behaviour consistent with the reference implementation.
                     best_dir = k
 
             if best_dir is not None:
