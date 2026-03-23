@@ -1,6 +1,7 @@
-# scripts/visualization.py
 from __future__ import annotations
 
+import os
+import warnings
 from typing import Optional, Sequence, Tuple
 
 import ee
@@ -8,47 +9,48 @@ import geemap
 import matplotlib.pyplot as plt
 import numpy as np
 import rasterio
-import os
 
 LayerSpec = Tuple[ee.Image, dict, str]
 
 
 def visualize_map(layers: Sequence[LayerSpec]) -> geemap.Map:
     """
-    Create an interactive map and add EE image layers.
+    Create an interactive geemap instance and add Earth Engine image layers.
 
     Parameters
     ----------
-    layers
-        Sequence of (image, vis_params, name) tuples.
-        - image: ee.Image
-        - vis_params: dict compatible with Map.addLayer()
-        - name: layer name shown in the layer control
+    layers : sequence of tuple
+        Sequence of `(image, vis_params, name)` tuples, where:
+            - `image` is an `ee.Image`
+            - `vis_params` is a dictionary accepted by `Map.addLayer()`
+            - `name` is the layer name shown in the layer control
 
     Returns
     -------
     geemap.Map
-        Interactive map instance with added layers.
+        Interactive map with the requested layers.
     """
-    m = geemap.Map(basemap="Esri.WorldImagery")
-    m.add_basemap("Esri.WorldTopoMap")
+    map_obj = geemap.Map(basemap="Esri.WorldImagery")
+    map_obj.add_basemap("Esri.WorldTopoMap")
 
     for item in layers:
         try:
             image, vis_params, name = item
-        except Exception as e:
+        except Exception as exc:
             raise ValueError(
                 "Each layer must be a tuple: (ee.Image, vis_params: dict, name: str)."
-            ) from e
+            ) from exc
 
         if not isinstance(image, ee.image.Image):
-            # Keep this a warning; visualization should not hard-fail if one layer is wrong.
-            print(f"⚠ Warning: Layer '{name}' is not an ee.Image and will be skipped.")
+            warnings.warn(
+                f"Layer '{name}' is not an ee.Image and will be skipped.",
+                stacklevel=2,
+            )
             continue
 
-        m.addLayer(image, vis_params, name)
+        map_obj.addLayer(image, vis_params, name)
 
-    return m
+    return map_obj
 
 
 def vis_2sigma(
@@ -67,43 +69,78 @@ def vis_2sigma(
     """
     Build visualization parameters using a μ ± k·σ stretch over a region.
 
-    Notes
-    -----
-    - Statistics are computed over 'region' using reduceRegion.
-    - Masked pixels are ignored by reducers.
-    - If the region is fully masked (no valid pixels), this function falls back
-      to a conservative default range (0..1) to avoid runtime errors.
+    Statistics are computed over the supplied region using Earth Engine
+    reducers. Masked pixels are ignored. If the region contains no valid
+    pixels, the function falls back to a conservative default range.
+
+    The procedure consists of the following steps:
+
+    Step 0
+        Select the target band and validate optional percentile clamp
+        settings.
+
+    Step 1
+        Count valid pixels in the region to detect empty or fully masked
+        inputs.
+
+    Step 2
+        Compute mean and standard deviation over the region.
+
+    Step 3
+        Derive the sigma-based stretch and fall back to a default range
+        when the result is degenerate.
+
+    Step 4
+        Optionally clamp the sigma stretch to a percentile range.
+
+    Step 5
+        Convert the final min and max values to client-side parameters
+        compatible with `Map.addLayer()`.
 
     Parameters
     ----------
-    image
+    image : ee.Image
         Source image.
-    band
+    band : str
         Band name to visualize.
-    region
+    region : ee.Geometry
         Geometry used for statistics.
-    scale
-        Pixel scale (meters) used for reduceRegion.
-    k
-        Sigma multiplier for the stretch; default 2.0.
-    palette
-        Optional color palette for visualization.
-    clamp_to_pct
-        Optional percentile clamp, e.g. (2, 98), to make the stretch more robust.
-        The final min/max are clamped to the percentile range.
-    best_effort, max_pixels, tile_scale
-        Performance/robustness controls for reduceRegion.
+    scale : float
+        Pixel scale used for `reduceRegion`.
+    k : float, default=2.0
+        Sigma multiplier for the stretch.
+    palette : sequence of str, optional
+        Optional colour palette for visualization.
+    clamp_to_pct : tuple of int, optional
+        Optional percentile clamp, for example `(2, 98)`. The final
+        sigma-based stretch is constrained to this percentile interval.
+    best_effort : bool, default=True
+        Passed to `reduceRegion`.
+    max_pixels : float, default=1e13
+        Passed to `reduceRegion`.
+    tile_scale : int, default=4
+        Passed to `reduceRegion`.
 
     Returns
     -------
     dict
-        Map.addLayer()-compatible visualization parameters:
-        {'bands': [band], 'min': <float>, 'max': <float>, 'palette': [...]}.
+        Visualization dictionary compatible with `Map.addLayer()`.
     """
+    # ---------------------------------------------------------------------
+    # Step 0: Select the target band and validate optional inputs
+    # ---------------------------------------------------------------------
     img = image.select([band])
 
-    # Count valid pixels to detect fully masked/empty regions robustly.
-    # If the region is empty, reduceRegion(count) returns null -> guard with default 0.
+    if clamp_to_pct is not None:
+        lo, hi = clamp_to_pct
+        if not (0 <= lo < hi <= 100):
+            raise ValueError("clamp_to_pct must satisfy 0 <= low < high <= 100.")
+
+    # ---------------------------------------------------------------------
+    # Step 1: Count valid pixels in the target region
+    # ---------------------------------------------------------------------
+    # If the region is empty or fully masked, reduceRegion(count) may
+    # return null. A default value of 0 is therefore supplied.
     n_valid = ee.Number(
         img.reduceRegion(
             reducer=ee.Reducer.count(),
@@ -115,7 +152,9 @@ def vis_2sigma(
         ).get(band, 0)
     )
 
-    # Compute mean and standard deviation over the region (masked pixels ignored).
+    # ---------------------------------------------------------------------
+    # Step 2: Compute regional mean and standard deviation
+    # ---------------------------------------------------------------------
     stats = img.reduceRegion(
         reducer=ee.Reducer.mean().combine(ee.Reducer.stdDev(), sharedInputs=True),
         geometry=region,
@@ -125,27 +164,29 @@ def vis_2sigma(
         tileScale=tile_scale,
     )
 
-    # Use defaults to avoid null propagation in ee.Number() when region is empty.
+    # Provide safe defaults so that ee.Number() never receives null.
     mu = ee.Number(stats.get(f"{band}_mean", 0))
-    sig = ee.Number(stats.get(f"{band}_stdDev", 0))
+    sigma = ee.Number(stats.get(f"{band}_stdDev", 0))
 
-    vmin = ee.Number(0)
-    vmax = ee.Number(1)
+    # ---------------------------------------------------------------------
+    # Step 3: Derive the sigma-based stretch
+    # ---------------------------------------------------------------------
+    default_min = ee.Number(0)
+    default_max = ee.Number(1)
 
-    # If stats are present, compute μ ± k·σ.
-    vmin_sigma = mu.subtract(sig.multiply(k))
-    vmax_sigma = mu.add(sig.multiply(k))
+    vmin_sigma = mu.subtract(sigma.multiply(k))
+    vmax_sigma = mu.add(sigma.multiply(k))
 
-    # Use sigma stretch only if we have at least one valid pixel and sigma stretch is not degenerate.
-    use_sigma = n_valid.gt(0).And(vmax_sigma.neq(vmin_sigma)).And(sig.gt(0))
+    use_sigma = n_valid.gt(0).And(vmax_sigma.neq(vmin_sigma)).And(sigma.gt(0))
 
-    vmin = ee.Number(ee.Algorithms.If(use_sigma, vmin_sigma, vmin))
-    vmax = ee.Number(ee.Algorithms.If(use_sigma, vmax_sigma, vmax))
+    vmin = ee.Number(ee.Algorithms.If(use_sigma, vmin_sigma, default_min))
+    vmax = ee.Number(ee.Algorithms.If(use_sigma, vmax_sigma, default_max))
 
-    # Optional percentile clamp for robustness (reduces influence of extreme outliers).
+    # ---------------------------------------------------------------------
+    # Step 4: Optionally clamp the stretch by percentiles
+    # ---------------------------------------------------------------------
     if clamp_to_pct is not None:
-        lo, hi = clamp_to_pct
-        p = img.reduceRegion(
+        percentile_stats = img.reduceRegion(
             reducer=ee.Reducer.percentile([lo, hi]),
             geometry=region,
             scale=scale,
@@ -154,15 +195,20 @@ def vis_2sigma(
             tileScale=tile_scale,
         )
 
-        # If percentiles are missing, provide safe defaults.
-        pmin = ee.Number(p.get(f"{band}_p{lo}", vmin))
-        pmax = ee.Number(p.get(f"{band}_p{hi}", vmax))
+        pmin = ee.Number(percentile_stats.get(f"{band}_p{lo}", vmin))
+        pmax = ee.Number(percentile_stats.get(f"{band}_p{hi}", vmax))
 
         vmin = ee.Number(ee.Algorithms.If(n_valid.gt(0), vmin.max(pmin), vmin))
         vmax = ee.Number(ee.Algorithms.If(n_valid.gt(0), vmax.min(pmax), vmax))
 
-    # Bring min/max to client side for geemap Map.addLayer().
-    params = {"bands": [band], "min": float(vmin.getInfo()), "max": float(vmax.getInfo())}
+    # ---------------------------------------------------------------------
+    # Step 5: Convert to client-side visualization parameters
+    # ---------------------------------------------------------------------
+    params = {
+        "bands": [band],
+        "min": float(vmin.getInfo()),
+        "max": float(vmax.getInfo()),
+    }
     if palette:
         params["palette"] = list(palette)
 
@@ -177,39 +223,55 @@ def plot_tif(
     title: str | None = None,
 ) -> None:
     """
-    Static visualization of a single-band GeoTIFF raster.
+    Display a single-band GeoTIFF using a percentile-based contrast stretch.
 
-    The display range is derived from the [p_low, p_high] percentiles
-    computed over valid raster values. Values outside this interval
-    are clipped to the extreme colors of the colormap.
+    The display range is derived from the `[p_low, p_high]` percentiles
+    computed over valid raster values. Values outside this interval are
+    clipped to the extreme colours of the colormap.
 
-    This visualization is intended for local, static inspection of
-    raster outputs (e.g. figures for reports or theses).
+    This function is intended for local, static inspection of raster
+    outputs.
+
+    Parameters
+    ----------
+    tif_path : str
+        Path to the input GeoTIFF.
+    p_low : float, default=2.0
+        Lower percentile used for contrast stretching.
+    p_high : float, default=98.0
+        Upper percentile used for contrast stretching.
+    label : str, default="TWI"
+        Colourbar label.
+    title : str, optional
+        Plot title. If None, the input filename is used.
     """
+    if not (0.0 <= p_low < p_high <= 100.0):
+        raise ValueError("Percentiles must satisfy 0 <= p_low < p_high <= 100.")
+
     with rasterio.open(tif_path) as src:
         arr = src.read(1).astype(float)
         nodata = src.nodata
+
         if nodata is not None:
             arr = np.where(arr == nodata, np.nan, arr)
 
-    # Extract valid (finite) values
+    # Compute contrast stretch only from valid raster values.
     valid = arr[np.isfinite(arr)]
     if valid.size == 0:
-        raise ValueError("Raster contains no valid (finite) values.")
+        raise ValueError("Raster contains no valid finite values.")
 
-    # Percentile-based contrast stretch
     vmin = float(np.nanpercentile(valid, p_low))
     vmax = float(np.nanpercentile(valid, p_high))
 
-    # Numerical safety: fallback to full range if percentiles collapse
+    # Fall back to the full valid range if percentile values collapse.
     if not np.isfinite(vmin) or not np.isfinite(vmax) or vmin >= vmax:
         vmin = float(np.nanmin(valid))
         vmax = float(np.nanmax(valid))
 
     plt.figure(figsize=(8, 6))
-    im = plt.imshow(arr, vmin=vmin, vmax=vmax, cmap="RdYlBu")
-    cbar = plt.colorbar(im)
-    cbar.set_label(label)
+    image = plt.imshow(arr, vmin=vmin, vmax=vmax, cmap="RdYlBu")
+    colorbar = plt.colorbar(image)
+    colorbar.set_label(label)
 
     if title is None:
         title = os.path.basename(tif_path)
