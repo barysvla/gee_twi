@@ -14,7 +14,7 @@ D8_OFFSETS: list[Tuple[int, int]] = [
 ]
 
 
-def compute_flow_direction_d8(
+def flow_dir_d8(
     dem: np.ndarray,
     transform,
     *,
