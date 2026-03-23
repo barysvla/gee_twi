@@ -13,7 +13,7 @@ NEIGHBOR_OFFSETS_8: List[Tuple[int, int]] = [
 ]
 
 
-def priority_flood_fill(
+def fill_depressions(
     dem: np.ndarray,
     nodata: float = np.nan,
     seed_internal_nodata_as_outlet: bool = True,
