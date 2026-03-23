@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Literal, Optional
+from typing import Optional
 
 import ee
 import numpy as np
@@ -10,43 +10,44 @@ def compute_twi(
     flow_acc: ee.Image,
     slope_deg: ee.Image,
     *,
-    min_slope_deg: float = 0.1
+    min_slope_deg: float = 0.1,
 ) -> ee.Image:
     """
     Compute the Topographic Wetness Index (TWI) in Earth Engine.
 
-    The index is calculated according to the standard definition:
+    The index is computed as
 
-        TWI = ln( A / tan(beta) )
+        TWI = ln(A / tan(beta))
 
-    where:
-        A     ... contributing area
-        beta  ... local slope angle (in radians)
+    where `A` is the contributing area and `beta` is the local slope
+    angle in radians. A minimum slope threshold is applied to avoid
+    numerical instability.
 
     Parameters
     ----------
     flow_acc : ee.Image
-        Raster of contributing area (must be on the target grid).
+        Contributing-area raster on the target grid.
     slope_deg : ee.Image
         Slope raster in degrees.
-    min_slope_deg : float, optional
-        Minimum slope threshold (in degrees) used to prevent
-        numerical instability caused by tan(0).
+    min_slope_deg : float, default=0.1
+        Minimum slope threshold in degrees.
 
     Returns
     -------
     ee.Image
-        Single-band image named "TWI".
+        Single-band image named `"TWI"`.
     """
+    if min_slope_deg < 0.0:
+        raise ValueError("min_slope_deg must be non-negative.")
 
-    # Enforce a minimum slope to avoid division by zero
-    # (tan(0) = 0 → undefined logarithm)
+    # Prevent tan(beta) → 0 for flat areas.
+    # Without this, division by zero would lead to +inf and undefined log.
     safe_slope = slope_deg.max(ee.Number(float(min_slope_deg)))
 
-    # Convert slope from degrees to radians and compute tan(beta)
+    # Convert degrees → radians and evaluate tan(beta).
     tan_slope = safe_slope.multiply(np.pi).divide(180.0).tan()
 
-    # Compute TWI = ln(A / tan(beta))
+    # Compute TWI = ln(A / tan(beta)).
     twi = flow_acc.divide(tan_slope).log()
 
     return twi.rename("TWI")
@@ -63,64 +64,71 @@ def compute_twi_numpy(
     """
     Compute the Topographic Wetness Index (TWI) from NumPy arrays.
 
-    The index is calculated according to the standard definition:
+    The index is computed as
 
-        TWI = ln( A / tan(beta) )
+        TWI = ln(A / tan(beta))
 
-    where:
-        A     ... contributing area
-        beta  ... local slope angle (in radians)
+    where `A` is the contributing area and `beta` is the local slope
+    angle in radians. A minimum slope threshold is applied to avoid
+    numerical instability.
 
     Parameters
     ----------
     acc_np : np.ndarray
-        Contributing area raster defined on the target grid.
-        Units must already correspond to the chosen TWI definition.
+        Contributing-area raster on the target grid.
     slope_deg_np : np.ndarray
         Slope raster in degrees on the same grid.
-    min_slope_deg : float, optional
-        Minimum slope threshold (in degrees) used to prevent
-        numerical instability caused by tan(0).
-    nodata_mask : np.ndarray or None
-        Optional boolean mask (True = NoData). Masked cells are set to NaN.
-    out_dtype : str
-        Output dtype (default: float32).
+    min_slope_deg : float, default=0.1
+        Minimum slope threshold in degrees.
+    nodata_mask : np.ndarray, optional
+        Boolean mask indicating invalid cells (True = NoData).
+    out_dtype : str, default="float32"
+        Output data type.
 
     Returns
     -------
     np.ndarray
-        (H, W) array representing TWI with NoData encoded as NaN.
+        Two-dimensional TWI array with NoData represented as NaN.
     """
-
-    # Promote inputs to float64 for numerical stability
+    # Promote to float64 for stable division and logarithm.
+    # float32 would be more memory-efficient but less stable numerically.
     acc = np.asarray(acc_np, dtype=np.float64)
     slope_deg = np.asarray(slope_deg_np, dtype=np.float64)
 
-    # Validate grid consistency
+    # Grid consistency is required — TWI is defined cell-wise.
     if acc.shape != slope_deg.shape:
         raise ValueError(f"Shape mismatch: acc {acc.shape} vs slope {slope_deg.shape}")
+    if min_slope_deg < 0.0:
+        raise ValueError("min_slope_deg must be non-negative.")
 
-    # Initialize invalid mask (non-finite inputs treated as NoData)
+    # Base invalid mask:
+    # - non-finite values (NaN, inf)
     invalid = ~np.isfinite(acc) | ~np.isfinite(slope_deg)
 
-    # Apply optional external NoData mask
+    # Optional external mask (e.g., DEM mask propagated through pipeline)
     if nodata_mask is not None:
-        m = np.asarray(nodata_mask, dtype=bool)
-        if m.shape != acc.shape:
-            raise ValueError("nodata_mask must have the same shape as inputs")
-        invalid |= m
+        mask = np.asarray(nodata_mask, dtype=bool)
+        if mask.shape != acc.shape:
+            raise ValueError("nodata_mask must have the same shape as the input arrays.")
+        invalid |= mask
 
-    # Enforce minimum slope to avoid division by zero (tan(0) = 0)
+    # Contributing area must be strictly positive.
+    # Zero or negative values lead to log(0) or undefined behaviour.
+    invalid |= acc <= 0.0
+
+    # Enforce minimum slope:
+    # prevents tan(beta) → 0 and stabilizes flat areas.
     slope_deg_safe = np.maximum(slope_deg, float(min_slope_deg))
 
-    # Convert slope from degrees to radians and compute tan(beta)
+    # Convert slope to radians and compute tan(beta).
     tan_slope = np.tan(np.deg2rad(slope_deg_safe))
 
-    # Allocate output array (NaN by default)
+    # Allocate output filled with NaN (default NoData representation).
     twi = np.full(acc.shape, np.nan, dtype=np.float64)
 
-    # Compute TWI only on valid cells
+    # Compute only on valid cells to avoid warnings and invalid math.
     valid = ~invalid
     twi[valid] = np.log(acc[valid] / tan_slope[valid])
 
+    # Cast to target dtype at the end (after stable computation).
     return twi.astype(out_dtype, copy=False)
