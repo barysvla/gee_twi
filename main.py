@@ -3,6 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 import ee
+import numpy as np
 
 from scripts.fill_depressions import fill_depressions
 from scripts.flow_accumulation import flow_acc
