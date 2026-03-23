@@ -60,7 +60,7 @@ def _default_profile(
     }
 
 
-def save_array_as_geotiff(
+def save_tif(
     arr: np.ndarray,
     transform: Affine,
     crs: Any,
@@ -137,7 +137,7 @@ def save_array_as_geotiff(
     # ---------------------------------------------------------------------
     array = np.asarray(arr)
     if array.ndim != 2:
-        raise ValueError("save_array_as_geotiff expects a 2D array (single band).")
+        raise ValueError("save_tif expects a 2D array (single band).")
 
     _ensure_dir(filename)
 
@@ -198,7 +198,7 @@ def save_array_as_geotiff(
     return filename
 
 
-def clip_tif_by_geojson(
+def clip_tif(
     input_tif: str,
     geojson_geom: dict,
     output_tif: str,
@@ -347,7 +347,7 @@ def clip_tif_by_geojson(
     return output_tif
 
 
-def read_geotiff_to_numpy(
+def read_tif(
     tif_path: str,
     *,
     nodata_mask: np.ndarray | None = None,
