@@ -14,7 +14,7 @@ import numpy as np
 import rasterio
 
 
-def export_dem_and_area_to_arrays(
+def export_dem_grid(
     src: Union[ee.image.Image, ee.imagecollection.ImageCollection, str],
     region_geom: ee.Geometry,
     *,
@@ -231,13 +231,13 @@ def export_dem_and_area_to_arrays(
         dem_path = os.path.join(tmp_dir, dem_filename)
         pixel_area_path = os.path.join(tmp_dir, px_filename)
 
-        export_ee_image_to_geotiff(
+        ee_to_tif(
             ee_dem_grid.unmask(nodata_value),
             out_path=dem_path,
             grid=export_grid,
             quiet=quiet,
         )
-        export_ee_image_to_geotiff(
+        ee_to_tif(
             ee_px_area_grid,
             out_path=pixel_area_path,
             grid=export_grid,
@@ -301,7 +301,7 @@ def export_dem_and_area_to_arrays(
                 logging.getLogger(name).setLevel(level)
 
 
-def export_ee_image_to_geotiff(
+def ee_to_tif(
     img: ee.Image,
     *,
     out_path: str,
