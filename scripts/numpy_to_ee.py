@@ -163,7 +163,7 @@ def _write_cog_local(
         dst.write(arr_f32, 1)
 
 
-def push_array_to_ee_geotiff(
+def np_to_ee(
     array_np: np.ndarray,
     *,
     transform,
@@ -262,7 +262,7 @@ def push_array_to_ee_geotiff(
 
     arr = np.asarray(array_np)
     if arr.ndim != 2:
-        raise ValueError("push_array_to_ee_geotiff expects a 2D array.")
+        raise ValueError("np_to_ee expects a 2D array.")
 
     # ---------------------------------------------------------------------
     # Step 1: Construct the effective NoData mask
