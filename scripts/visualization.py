@@ -13,7 +13,7 @@ import rasterio
 LayerSpec = Tuple[ee.Image, dict, str]
 
 
-def visualize_map(layers: Sequence[LayerSpec]) -> geemap.Map:
+def show_map(layers: Sequence[LayerSpec]) -> geemap.Map:
     """
     Create an interactive geemap instance and add Earth Engine image layers.
 
@@ -53,7 +53,7 @@ def visualize_map(layers: Sequence[LayerSpec]) -> geemap.Map:
     return map_obj
 
 
-def vis_2sigma(
+def vis_sigma(
     image: ee.Image,
     band: str,
     region: ee.Geometry,
@@ -215,7 +215,7 @@ def vis_2sigma(
     return params
 
 
-def plot_tif(
+def plot_raster(
     tif_path: str,
     p_low: float = 2.0,
     p_high: float = 98.0,
