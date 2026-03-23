@@ -5,12 +5,13 @@ from typing import Literal
 
 import numpy as np
 
-
-# D8 neighborhood offsets in the following order:
-# [NE, E, SE, S, SW, W, NW, N]
+# D8 neighbourhood offsets.
+# The order is fixed because the index is used as the encoded
+# flow-direction value:
+# 0..7 = [NE, E, SE, S, SW, W, NW, N]
 D8_OFFSETS: list[tuple[int, int]] = [
-    (-1,  1), (0,  1), (1,  1), (1,  0),
-    ( 1, -1), (0, -1), (-1, -1), (-1,  0),
+    (-1, 1), (0, 1), (1, 1), (1, 0),
+    (1, -1), (0, -1), (-1, -1), (-1, 0),
 ]
 
 
@@ -26,161 +27,186 @@ def compute_flow_accumulation(
     """
     Compute flow accumulation for D8 and FD8/MFD routing schemes.
 
-    The algorithm follows a topological dependency-based approach:
-    cells are processed from locations without upstream inflow toward
-    downstream cells, so that each cell is evaluated only after all of
-    its contributing neighbors have been resolved. This principle is
-    consistent with flow-network traversal derived from O'Callaghan &
-    Mark (1984) and with later implementation-oriented formulations
-    such as Barták (2008). In the multi-flow case, accumulated
-    contributions are distributed according to routing weights.
+    This function computes flow accumulation using a topological,
+    dependency-based traversal of the flow graph. Cells are processed
+    from locations without upstream inflow toward downstream cells, so
+    that each cell is evaluated only after all contributing neighbours
+    have been resolved.
+
+    This approach is consistent with the concept of flow-network
+    extraction and downstream traversal introduced by O'Callaghan and
+    Mark (1984), and with subsequent implementation-oriented
+    formulations used in hydrological modelling, including Barták
+    (2008). In these formulations, the drainage network is treated as
+    a directed acyclic graph, and accumulation is computed by resolving
+    upstream dependencies in a topological order.
+
+    In the multi-flow case, accumulated contributions are distributed
+    among multiple downstream neighbours according to routing weights.
 
     Exactly one of `dir_idx` or `flow_weights` must be provided.
 
+    The procedure consists of the following steps:
+
+    Step 0
+        Validate the input configuration and determine whether D8 or
+        FD8/MFD routing is used.
+
+    Step 1
+        Prepare the flow-routing representation and define the valid
+        computational domain.
+
+    Step 2
+        Initialize accumulation values in the requested output units.
+
+    Step 3
+        Count upstream inflow dependencies for each valid cell.
+
+    Step 4
+        Initialize the processing queue with cells that have no upstream
+        inflow.
+
+    Step 5
+        Propagate accumulation downstream in topological order.
+
+    Step 6
+        Optionally verify that all valid cells were processed.
+
+    Step 7
+        Convert accumulation values to the requested output units.
+
     Parameters
     ----------
-    dir_idx : ndarray of shape (H, W), optional
-        D8 flow direction indices. Encoding:
-            0..7  = [NE, E, SE, S, SW, W, NW, N]
-            -1    = no defined outflow (sink, outlet, or NoData depending on nodata_mask)
-        If `nodata_mask` is None, values < 0 are conservatively treated as NoData.
-
-    flow_weights : ndarray of shape (H, W, 8), optional
-        Multi-flow (FD8/MFD) routing weights to D8 neighbors in the order
-        [NE, E, SE, S, SW, W, NW, N].
-        All weights must be non-negative. For cells with outflow,
-        weights are typically expected to sum to 1.
-
-    nodata_mask : ndarray of shape (H, W), optional
-        Boolean mask indicating invalid cells (True = NoData).
-        NoData cells neither contribute nor receive flow.
+    dir_idx : np.ndarray of shape (H, W), optional
+        D8 flow-direction indices encoded as:
+            0..7 = [NE, E, SE, S, SW, W, NW, N]
+            -1   = no defined outflow
+        If `nodata_mask` is None, values below 0 are conservatively
+        treated as NoData.
+    flow_weights : np.ndarray of shape (H, W, 8), optional
+        Multi-flow routing weights to D8 neighbours in the order
+        [NE, E, SE, S, SW, W, NW, N]. All weights must be non-negative.
+        Cells with outflow are typically expected to have weights
+        summing to 1.
+    nodata_mask : np.ndarray of shape (H, W), optional
+        Boolean mask indicating invalid cells (True = NoData). NoData
+        cells neither contribute nor receive flow.
         If None:
-            - For D8, inferred as (dir_idx < 0).
-            - For MFD, all cells are assumed valid.
-
-    pixel_area_m2 : ndarray of shape (H, W), optional
-        Per-cell pixel area in square meters.
-        Required when `out` is "m2" or "km2".
-        In WGS84 workflows, this must account for latitude-dependent
-        variation in pixel size.
-
+            - for D8, inferred as `(dir_idx < 0)`
+            - for MFD, all cells are assumed valid
+    pixel_area_m2 : np.ndarray of shape (H, W), optional
+        Per-cell pixel area in square metres. Required when `out` is
+        `"m2"` or `"km2"`.
     out : {"cells", "m2", "km2"}, default="km2"
         Output units:
-            "cells"  – contributing cell count
-            "m2"     – contributing area in square meters
-            "km2"    – contributing area in square kilometers
-
+            "cells" = contributing cell count
+            "m2"    = contributing area in square metres
+            "km2"   = contributing area in square kilometres
     cycle_check : bool, default=True
-        If True, verifies that all valid cells were processed. A mismatch usually
-        indicates a cycle in the flow graph caused by unresolved flats,
-        depressions, or incorrect hydrological conditioning.
+        If True, verify that all valid cells were processed. A mismatch
+        usually indicates a cycle in the flow graph caused by unresolved
+        flats, depressions, or incorrect hydrological conditioning.
 
     Returns
     -------
-    acc : ndarray of shape (H, W), dtype float32
-        Flow accumulation raster in the requested units.
-        Cells marked as NoData contain value 0.
+    acc : np.ndarray of shape (H, W), dtype float32
+        Flow-accumulation raster in the requested units. NoData cells
+        contain value 0.
 
     References
     ----------
     O'Callaghan, J. F., & Mark, D. M. (1984).
     The extraction of drainage networks from digital elevation data.
     Computer Vision, Graphics, and Image Processing, 28(3), 323–344.
-    
+
     Barták, V. (2008).
     Algoritmy pro zpracování digitálních modelů terénu s aplikacemi
     v hydrologickém modelování. Diplomová práce, Česká zemědělská
     univerzita v Praze.
     """
-
-    # -------------------------------------------------------------------------
-    # 1. Validate input configuration
-    # -------------------------------------------------------------------------
-
+    # ---------------------------------------------------------------------
+    # Step 0: Validate the input configuration
+    # ---------------------------------------------------------------------
     if (dir_idx is None) == (flow_weights is None):
         raise ValueError("Provide exactly one of dir_idx or flow_weights.")
 
     is_d8 = dir_idx is not None
 
-    # -------------------------------------------------------------------------
-    # 2. Prepare the flow-routing representation
-    # -------------------------------------------------------------------------
-
+    # ---------------------------------------------------------------------
+    # Step 1: Prepare the flow-routing representation
+    # ---------------------------------------------------------------------
     if is_d8:
-        # D8 mode: each cell has at most one downstream receiver.
         d = np.asarray(dir_idx)
         if d.ndim != 2:
             raise ValueError("dir_idx must have shape (H, W).")
-        H, W = d.shape
 
-        # Define the valid computational domain.
+        h, w = d.shape
+
         if nodata_mask is None:
-            # Conservative fallback: negative direction indices are treated as NoData.
-            nodata = (d < 0)
+            nodata = d < 0
         else:
             nodata = np.asarray(nodata_mask, dtype=bool)
+            if nodata.shape != (h, w):
+                raise ValueError("nodata_mask must have shape (H, W).")
 
-        # Keep only valid D8 indices (0..7); all other values are treated
-        # as cells without downstream outflow.
-        d_sane = np.full((H, W), -1, dtype=np.int16)
+        # Retain only valid D8 direction indices.
+        # All other values are treated as cells without downstream outflow.
+        d_sane = np.full((h, w), -1, dtype=np.int16)
         valid_dir = (~nodata) & (d >= 0) & (d < 8)
         d_sane[valid_dir] = d[valid_dir]
 
     else:
-        # MFD/FD8 mode: each cell may distribute flow to multiple neighbors.
-        Wgt = np.asarray(flow_weights, dtype=np.float32)
-        if Wgt.ndim != 3 or Wgt.shape[2] != 8:
+        wgt = np.asarray(flow_weights, dtype=np.float32)
+        if wgt.ndim != 3 or wgt.shape[2] != 8:
             raise ValueError("flow_weights must have shape (H, W, 8).")
-        H, W, _ = Wgt.shape
+
+        h, w, _ = wgt.shape
 
         if nodata_mask is None:
-            nodata = np.zeros((H, W), dtype=bool)
+            nodata = np.zeros((h, w), dtype=bool)
         else:
             nodata = np.asarray(nodata_mask, dtype=bool)
+            if nodata.shape != (h, w):
+                raise ValueError("nodata_mask must have shape (H, W).")
 
-        # Improve numerical robustness:
-        # - replace NaN values with 0
-        # - clamp negative weights to 0
-        Wgt = np.nan_to_num(Wgt, nan=0.0)
-        np.maximum(Wgt, 0.0, out=Wgt)
+        # Replace NaN values with 0 and clamp negative weights to 0.
+        wgt = np.nan_to_num(wgt, nan=0.0)
+        np.maximum(wgt, 0.0, out=wgt)
 
-        # NoData cells must not send any flow.
-        Wgt[nodata, :] = 0.0
+        # NoData cells must not route flow.
+        wgt[nodata, :] = 0.0
 
-    # -------------------------------------------------------------------------
-    # 3. Initialize accumulation values
-    # -------------------------------------------------------------------------
-
-    # Each valid cell contributes either:
-    # - 1, when accumulation is expressed as contributing cell count
-    # - its own pixel area, when accumulation is expressed in area units
+    # ---------------------------------------------------------------------
+    # Step 2: Initialize accumulation values
+    # ---------------------------------------------------------------------
     if out == "cells":
-        acc = np.ones((H, W), dtype=np.float64)
-    else:
+        acc = np.ones((h, w), dtype=np.float64)
+    elif out in ("m2", "km2"):
         if pixel_area_m2 is None:
-            raise ValueError("pixel_area_m2 array is required.")
+            raise ValueError('pixel_area_m2 is required when out is "m2" or "km2".')
+
         pa = np.asarray(pixel_area_m2, dtype=np.float64)
-        if pa.shape != (H, W):
+        if pa.shape != (h, w):
             raise ValueError("pixel_area_m2 must have shape (H, W).")
 
-        # Each cell starts with its own contributing area.
         acc = pa.copy()
+    else:
+        raise ValueError('out must be one of "cells", "m2", or "km2".')
 
     # NoData cells neither contribute nor accumulate flow.
     acc[nodata] = 0.0
 
-    # -------------------------------------------------------------------------
-    # 4. Count upstream inflows for each cell
-    # -------------------------------------------------------------------------
-
-    # indeg[i, j] stores the number of neighboring cells routing flow into (i, j).
-    indeg = np.zeros((H, W), dtype=np.int32)
+    # ---------------------------------------------------------------------
+    # Step 3: Count upstream inflow dependencies
+    # ---------------------------------------------------------------------
+    indeg = np.zeros((h, w), dtype=np.int32)
 
     if is_d8:
-        for i in range(H):
-            for j in range(W):
+        for i in range(h):
+            for j in range(w):
                 if nodata[i, j]:
                     continue
+
                 k = int(d_sane[i, j])
                 if k < 0:
                     continue
@@ -188,34 +214,33 @@ def compute_flow_accumulation(
                 di, dj = D8_OFFSETS[k]
                 ni, nj = i + di, j + dj
 
-                if 0 <= ni < H and 0 <= nj < W and (not nodata[ni, nj]):
+                if 0 <= ni < h and 0 <= nj < w and (not nodata[ni, nj]):
                     indeg[ni, nj] += 1
+
     else:
-        for i in range(H):
-            for j in range(W):
+        for i in range(h):
+            for j in range(w):
                 if nodata[i, j]:
                     continue
+
                 for k, (di, dj) in enumerate(D8_OFFSETS):
-                    if Wgt[i, j, k] <= 0.0:
+                    if wgt[i, j, k] <= 0.0:
                         continue
+
                     ni, nj = i + di, j + dj
-                    if 0 <= ni < H and 0 <= nj < W and (not nodata[ni, nj]):
+                    if 0 <= ni < h and 0 <= nj < w and (not nodata[ni, nj]):
                         indeg[ni, nj] += 1
 
-    # -------------------------------------------------------------------------
-    # 5. Initialize the processing queue
-    # -------------------------------------------------------------------------
-
-    # Start from cells without upstream inflow. These usually correspond
-    # to source areas, ridges, or local topographic highs.
+    # ---------------------------------------------------------------------
+    # Step 4: Initialize the processing queue
+    # ---------------------------------------------------------------------
     q: deque[tuple[int, int]] = deque()
     for i, j in np.argwhere((indeg == 0) & (~nodata)):
         q.append((int(i), int(j)))
 
-    # -------------------------------------------------------------------------
-    # 6. Propagate accumulation downstream
-    # -------------------------------------------------------------------------
-
+    # ---------------------------------------------------------------------
+    # Step 5: Propagate accumulation downstream
+    # ---------------------------------------------------------------------
     visited = 0
 
     while q:
@@ -223,7 +248,7 @@ def compute_flow_accumulation(
         visited += 1
 
         if is_d8:
-            # D8 mode: transfer the full accumulated value to one downstream cell.
+            # Transfer the full accumulated value to the single downstream cell.
             k = int(d_sane[i, j])
             if k < 0:
                 continue
@@ -231,51 +256,45 @@ def compute_flow_accumulation(
             di, dj = D8_OFFSETS[k]
             ni, nj = i + di, j + dj
 
-            if 0 <= ni < H and 0 <= nj < W and (not nodata[ni, nj]):
+            if 0 <= ni < h and 0 <= nj < w and (not nodata[ni, nj]):
                 acc[ni, nj] += acc[i, j]
-
-                # One upstream dependency has now been resolved for the receiver.
                 indeg[ni, nj] -= 1
+
                 if indeg[ni, nj] == 0:
                     q.append((ni, nj))
 
         else:
-            # MFD/FD8 mode: distribute the accumulated value proportionally
-            # among all downstream receivers with positive routing weights.
+            # Distribute the accumulated value among all downstream cells
+            # with positive routing weights.
             a = acc[i, j]
 
             for k, (di, dj) in enumerate(D8_OFFSETS):
-                w = float(Wgt[i, j, k])
-                if w <= 0.0:
+                weight = float(wgt[i, j, k])
+                if weight <= 0.0:
                     continue
 
                 ni, nj = i + di, j + dj
-                if 0 <= ni < H and 0 <= nj < W and (not nodata[ni, nj]):
-                    acc[ni, nj] += a * w
-
-                    # One upstream dependency has now been resolved for the receiver.
+                if 0 <= ni < h and 0 <= nj < w and (not nodata[ni, nj]):
+                    acc[ni, nj] += a * weight
                     indeg[ni, nj] -= 1
+
                     if indeg[ni, nj] == 0:
                         q.append((ni, nj))
 
-    # -------------------------------------------------------------------------
-    # 7. Optional cycle detection
-    # -------------------------------------------------------------------------
-
+    # ---------------------------------------------------------------------
+    # Step 6: Optionally verify complete processing
+    # ---------------------------------------------------------------------
     if cycle_check:
-        # In a correctly conditioned DEM, all valid cells should be processed.
         if visited != int((~nodata).sum()):
             raise RuntimeError(
                 "Cycle detected in flow graph. "
                 "Check hydrological conditioning and flat resolution."
             )
 
-    # -------------------------------------------------------------------------
-    # 8. Convert output units if needed
-    # -------------------------------------------------------------------------
-
+    # ---------------------------------------------------------------------
+    # Step 7: Convert output units if required
+    # ---------------------------------------------------------------------
     if out == "km2":
-        acc *= 1e-6  # Convert m² to km²
+        acc *= 1e-6
 
     return acc.astype(np.float32)
-    
