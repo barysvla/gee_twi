@@ -1,31 +1,32 @@
-# scripts/geotiff_io.py
 from __future__ import annotations
 
 import os
-from typing import Optional, Any
+from typing import Any, Optional
 
 import numpy as np
 import rasterio
-from rasterio.transform import Affine
 from rasterio.mask import mask as rio_mask
+from rasterio.transform import Affine
 from rasterio.warp import transform_geom
 
 
 def _ensure_dir(path: str) -> None:
-    """Create parent directory for a file path if it does not exist."""
+    """Create the parent directory for a file path if it does not exist."""
     out_dir = os.path.dirname(path)
     if out_dir and not os.path.exists(out_dir):
         os.makedirs(out_dir, exist_ok=True)
 
 
 def _as_bool_mask(mask_arr: Optional[np.ndarray], shape: tuple[int, int]) -> np.ndarray:
-    """Validate/construct a boolean NoData mask (True = NoData)."""
+    """Return a boolean NoData mask and validate its shape."""
     if mask_arr is None:
         return np.zeros(shape, dtype=bool)
-    m = np.asarray(mask_arr, dtype=bool)
-    if m.shape != shape:
-        raise ValueError(f"nodata_mask must have shape {shape}, got {m.shape}")
-    return m
+
+    mask = np.asarray(mask_arr, dtype=bool)
+    if mask.shape != shape:
+        raise ValueError(f"nodata_mask must have shape {shape}, got {mask.shape}")
+
+    return mask
 
 
 def _default_profile(
@@ -41,7 +42,7 @@ def _default_profile(
     blockysize: int = 256,
     nodata_value: float = np.nan,
 ) -> dict:
-    """Build a consistent GeoTIFF profile for outputs."""
+    """Build a consistent single-band GeoTIFF profile."""
     return {
         "driver": "GTiff",
         "height": int(height),
@@ -54,8 +55,8 @@ def _default_profile(
         "tiled": tiled,
         "blockxsize": int(blockxsize),
         "blockysize": int(blockysize),
-        # For NaN we store nodata as None and rely on raster mask
-        "nodata": (None if np.isnan(nodata_value) else float(nodata_value)),
+        # When NoData is represented by NaN, store nodata as None and rely on the raster mask.
+        "nodata": None if np.isnan(nodata_value) else float(nodata_value),
     }
 
 
@@ -73,43 +74,104 @@ def save_array_as_geotiff(
     blockysize: int = 256,
 ) -> str:
     """
-    Save a 2D NumPy array to GeoTIFF, preserving georeference/CRS and NoData mask.
+    Save a two-dimensional NumPy array to a single-band GeoTIFF.
 
-    Conventions:
-    - Output is single-band GeoTIFF.
-    - If nodata_value is NaN (default), NoData is represented via raster mask.
-    - If nodata_mask is None, non-finite values in 'arr' are treated as NoData.
+    This function writes a raster array together with its georeference,
+    coordinate reference system, and NoData definition. If `nodata_value`
+    is NaN, NoData is represented using an explicit raster mask.
+
+    The procedure consists of the following steps:
+
+    Step 0
+        Validate the input array and prepare the output directory.
+
+    Step 1
+        Derive the effective NoData mask.
+
+    Step 2
+        Prepare the output array and materialize NoData values.
+
+    Step 3
+        Build the GeoTIFF profile.
+
+    Step 4
+        Write the raster and optional band metadata.
+
+    Step 5
+        Write an explicit raster mask when NoData is represented by NaN.
+
+    Parameters
+    ----------
+    arr : np.ndarray
+        Two-dimensional input array.
+    transform : affine.Affine
+        Affine transform describing raster georeferencing.
+    crs : Any
+        Coordinate reference system.
+    nodata_mask : np.ndarray, optional
+        Boolean mask indicating NoData cells (True = NoData). If None,
+        non-finite values in `arr` are treated as NoData where possible.
+    filename : str, default="output.tif"
+        Output GeoTIFF path.
+    dtype : str, optional
+        Output data type. If None, the dtype of `arr` is preserved.
+    compress : str, default="LZW"
+        Compression method used for the GeoTIFF.
+    nodata_value : float, default=np.nan
+        NoData value written to the output raster. If NaN, NoData is
+        represented through the raster mask.
+    band_name : str, optional
+        Optional band description.
+    blockxsize : int, default=256
+        Internal tile width.
+    blockysize : int, default=256
+        Internal tile height.
+
+    Returns
+    -------
+    str
+        Path to the created GeoTIFF.
     """
-    a = np.asarray(arr)
-    if a.ndim != 2:
+    # ---------------------------------------------------------------------
+    # Step 0: Validate input and prepare output directory
+    # ---------------------------------------------------------------------
+    array = np.asarray(arr)
+    if array.ndim != 2:
         raise ValueError("save_array_as_geotiff expects a 2D array (single band).")
 
     _ensure_dir(filename)
 
-    out_dtype = dtype or str(a.dtype)
+    out_dtype = dtype or str(array.dtype)
 
-    # Determine NoData mask
+    # ---------------------------------------------------------------------
+    # Step 1: Derive the effective NoData mask
+    # ---------------------------------------------------------------------
     if nodata_mask is None:
         try:
-            nodata = ~np.isfinite(a)
+            nodata = ~np.isfinite(array)
         except Exception:
-            nodata = np.zeros_like(a, dtype=bool)
+            nodata = np.zeros_like(array, dtype=bool)
     else:
-        nodata = _as_bool_mask(nodata_mask, a.shape)
+        nodata = _as_bool_mask(nodata_mask, array.shape)
 
-    # Prepare data for write
-    write_arr = a.astype(out_dtype, copy=True)
+    # ---------------------------------------------------------------------
+    # Step 2: Prepare the output array
+    # ---------------------------------------------------------------------
+    write_arr = array.astype(out_dtype, copy=True)
 
     if np.isfinite(nodata_value):
         write_arr[nodata] = nodata_value
     else:
-        # If nodata_value is NaN, keep NaNs as-is; enforce NaN in nodata cells if needed
+        # Preserve NaN-based NoData representation for floating-point outputs.
         if np.issubdtype(write_arr.dtype, np.floating):
             write_arr[nodata] = np.nan
 
+    # ---------------------------------------------------------------------
+    # Step 3: Build the GeoTIFF profile
+    # ---------------------------------------------------------------------
     profile = _default_profile(
-        height=a.shape[0],
-        width=a.shape[1],
+        height=array.shape[0],
+        width=array.shape[1],
         dtype=str(write_arr.dtype),
         crs=crs,
         transform=transform,
@@ -120,12 +182,15 @@ def save_array_as_geotiff(
         nodata_value=nodata_value,
     )
 
+    # ---------------------------------------------------------------------
+    # Step 4-5: Write the raster and optional raster mask
+    # ---------------------------------------------------------------------
     with rasterio.open(filename, "w", **profile) as dst:
         dst.write(write_arr, 1)
+
         if band_name:
             dst.set_band_description(1, band_name)
 
-        # If nodata_value is NaN, write an explicit mask (255=valid, 0=nodata)
         if np.isnan(nodata_value):
             mask_bytes = (~nodata).astype("uint8") * 255
             dst.write_mask(mask_bytes)
@@ -148,20 +213,77 @@ def clip_tif_by_geojson(
     blockysize: int = 256,
 ) -> str:
     """
-    Clip a GeoTIFF by a GeoJSON geometry. Pixels outside AOI -> NoData (NaN by default).
+    Clip a GeoTIFF by a GeoJSON geometry and write the result to a new raster.
 
-    Steps:
-    - Reproject input geometry (assumed WGS84 by default) into raster CRS.
-    - Mask + crop the raster to AOI.
-    - Write output as GeoTIFF with consistent compression/tiling and band description.
+    The input geometry is reprojected to the raster CRS, the raster is
+    cropped and masked to the area of interest, and the output is written
+    as a single-band GeoTIFF with consistent compression, tiling, and
+    NoData handling.
+
+    The procedure consists of the following steps:
+
+    Step 0
+        Prepare the output directory.
+
+    Step 1
+        Open the input raster and reproject the input geometry to the
+        raster coordinate reference system.
+
+    Step 2
+        Mask and crop the raster to the area of interest.
+
+    Step 3
+        Normalize input NoData values in the clipped raster.
+
+    Step 4
+        Build the output GeoTIFF profile.
+
+    Step 5
+        Write the clipped raster and optional raster mask.
+
+    Parameters
+    ----------
+    input_tif : str
+        Path to the input GeoTIFF.
+    geojson_geom : dict
+        Input GeoJSON geometry.
+    output_tif : str
+        Path to the output GeoTIFF.
+    band_name : str, optional
+        Optional band description.
+    src_crs_assumed : str, default="EPSG:4326"
+        CRS assumed for the input GeoJSON geometry.
+    all_touched : bool, default=True
+        Passed to `rasterio.mask.mask`.
+    dtype : str, default="float32"
+        Output data type.
+    compress : str, default="LZW"
+        Compression method used for the output GeoTIFF.
+    nodata_value : float, default=np.nan
+        NoData value written to the output raster. If NaN, NoData is
+        represented through the raster mask.
+    blockxsize : int, default=256
+        Internal tile width.
+    blockysize : int, default=256
+        Internal tile height.
+
+    Returns
+    -------
+    str
+        Path to the created clipped GeoTIFF.
     """
+    # ---------------------------------------------------------------------
+    # Step 0: Prepare the output directory
+    # ---------------------------------------------------------------------
     _ensure_dir(output_tif)
 
     with rasterio.open(input_tif) as src:
         src_meta = src.meta.copy()
         dst_crs_str = src.crs.to_string()
 
-        # Reproject GeoJSON geometry into raster CRS
+        # -----------------------------------------------------------------
+        # Step 1: Reproject the input geometry to raster CRS
+        # -----------------------------------------------------------------
         geom_in_raster_crs = transform_geom(
             src_crs=src_crs_assumed,
             dst_crs=dst_crs_str,
@@ -169,7 +291,9 @@ def clip_tif_by_geojson(
             precision=6,
         )
 
-        # Mask raster to AOI
+        # -----------------------------------------------------------------
+        # Step 2: Mask and crop the raster to the AOI
+        # -----------------------------------------------------------------
         out_image, out_transform = rio_mask(
             src,
             [geom_in_raster_crs],
@@ -179,15 +303,18 @@ def clip_tif_by_geojson(
             filled=True,
         )
 
-        # out_image shape is (bands, H, W); here we assume single band inputs/outputs
         out_image = out_image.astype(dtype, copy=False)
 
-        # If input had a finite nodata value, normalize it to NaN in the output (robustness)
+        # -----------------------------------------------------------------
+        # Step 3: Normalize source NoData values
+        # -----------------------------------------------------------------
         in_nodata = src_meta.get("nodata")
         if in_nodata is not None and np.isfinite(in_nodata):
             out_image[out_image == in_nodata] = np.nan
 
-        # Build output profile with unified settings
+        # -----------------------------------------------------------------
+        # Step 4: Build the output profile
+        # -----------------------------------------------------------------
         out_meta = src_meta.copy()
         out_meta.update(
             _default_profile(
@@ -204,12 +331,15 @@ def clip_tif_by_geojson(
             )
         )
 
+        # -----------------------------------------------------------------
+        # Step 5: Write the clipped raster and optional raster mask
+        # -----------------------------------------------------------------
         with rasterio.open(output_tif, "w", **out_meta) as dst:
             dst.write(out_image)
+
             if band_name:
                 dst.set_band_description(1, band_name)
 
-            # If nodata_value is NaN, write mask based on finite values
             if np.isnan(nodata_value):
                 valid = np.isfinite(out_image[0])
                 dst.write_mask(valid.astype("uint8") * 255)
@@ -224,43 +354,44 @@ def read_geotiff_to_numpy(
     as_float32: bool = True,
 ) -> np.ndarray:
     """
-    Read a single-band GeoTIFF into a NumPy array and normalize NoData to NaN.
+    Read a single-band GeoTIFF to a NumPy array and normalize NoData to NaN.
+
+    The raster is read from disk, promoted to a floating type if needed,
+    source NoData values are converted to NaN, and an optional external
+    NoData mask can be applied afterward.
 
     Parameters
     ----------
     tif_path : str
-        Path to the GeoTIFF.
-    nodata_mask : np.ndarray or None
-        Optional boolean mask (True = NoData) applied after reading.
-        This is typically the DEM NoData mask used to enforce consistency.
-    as_float32 : bool
-        If True, returns float32; otherwise preserves rasterio dtype (except NaN normalization,
-        which requires float).
+        Path to the input GeoTIFF.
+    nodata_mask : np.ndarray, optional
+        Boolean mask indicating additional NoData cells (True = NoData).
+        This is typically used to enforce consistency with an external
+        DEM NoData mask.
+    as_float32 : bool, default=True
+        If True, return a float32 array. Otherwise preserve the raster
+        dtype where possible, except where floating conversion is needed
+        for NaN support.
 
     Returns
     -------
     np.ndarray
-        (H, W) array with NoData represented as NaN.
+        Two-dimensional array with NoData represented as NaN.
     """
     with rasterio.open(tif_path) as src:
         arr = src.read(1)
         nodata_val = src.nodata
 
-    # Promote to float for NaN support
     if as_float32:
         arr = arr.astype(np.float32)
-    else:
-        if not np.issubdtype(arr.dtype, np.floating):
-            arr = arr.astype(np.float32)
+    elif not np.issubdtype(arr.dtype, np.floating):
+        arr = arr.astype(np.float32)
 
-    # Normalize source nodata to NaN
     if nodata_val is not None:
         arr = np.where(np.isclose(arr, nodata_val), np.nan, arr)
 
-    # Normalize non-finite values to NaN
     arr = np.where(np.isfinite(arr), arr, np.nan)
 
-    # Apply external nodata mask (e.g., DEM mask)
     if nodata_mask is not None:
         arr = np.where(np.asarray(nodata_mask, dtype=bool), np.nan, arr)
 
