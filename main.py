@@ -142,7 +142,7 @@ def run_pipeline(
     if flow_method == "mfd_quinn_1991":
          # --- Flow direction MFD---
         flow_direction = compute_flow_direction_mfd_quinn_1991(
-            dem_resolved, transform, p=1.0, nodata_mask=nodata_mask
+            dem_resolved, transform, nodata_mask=nodata_mask
         )
         print("✅ Flow direction computed.")
         
