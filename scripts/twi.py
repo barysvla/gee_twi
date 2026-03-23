@@ -6,7 +6,7 @@ import ee
 import numpy as np
 
 
-def compute_twi(
+def twi_ee(
     flow_acc: ee.Image,
     slope_deg: ee.Image,
     *,
@@ -53,7 +53,7 @@ def compute_twi(
     return twi.rename("TWI")
 
 
-def compute_twi_numpy(
+def twi_np(
     acc_np: np.ndarray,
     slope_deg_np: np.ndarray,
     *,
