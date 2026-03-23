@@ -7,11 +7,11 @@ import ee
 from scripts.fill_depressions import fill_depressions
 from scripts.flow_accumulation import flow_acc
 from scripts.flow_direction_d8 import flow_dir_d8
-from scripts.flow_direction_mfd_quinn_1991 import flow_dir_mfd_quinn
+from scripts.flow_direction_mfd import flow_dir_mfd_quinn_1991
 from scripts.geotiff_io import clip_tif, read_tif, save_tif
 from scripts.grid_io import ee_to_tif, export_dem_grid
 from scripts.numpy_to_ee import np_to_ee
-from scripts.resolve_flats import resolve_flats_barnes
+from scripts.resolve_flats import resolve_flats_barnes_2014
 from scripts.twi import twi_ee, twi_np
 from scripts.visualization import plot_raster, show_map, vis_sigma
 
@@ -82,7 +82,7 @@ def _compute_flow(
 ) -> dict[str, Any]:
     """Compute flow direction and accumulation products for the selected routing method."""
     if flow_method == "mfd_quinn_1991":
-        dir_out = flow_dir_mfd_quinn(
+        dir_out = flow_dir_mfd_quinn_1991(
             dem_np,
             transform,
             nodata_mask=nodata_mask,
@@ -550,7 +550,7 @@ def run_pipeline(
     )
     print("Depression filling completed.")
 
-    dem_res_np, flat_mask, labels, flowdirs, stats = resolve_flats_barnes(
+    dem_res_np, flat_mask, labels, flowdirs, stats = resolve_flats_barnes_2014(
         dem_fill_np,
         nodata=np.nan,
         equal_tol=0.0,
