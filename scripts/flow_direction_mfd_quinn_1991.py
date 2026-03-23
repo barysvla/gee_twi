@@ -100,7 +100,7 @@ D8_OFFSETS: list[Tuple[int, int]] = [
 ]
 
 
-def compute_flow_direction_mfd_quinn_1991(
+def flow_dir_mfd_quinn(
     dem: np.ndarray,
     transform,
     *,
