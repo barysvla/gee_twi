@@ -9,7 +9,7 @@ shared spatial grid. It is used to prepare aligned DEM and pixel-area inputs
 for the workflow and to export additional Earth Engine layers to the same
 grid during later processing steps.
 
-The main functions are `export_dem_grid`, which builds and exports the input
+The functions are `export_dem_grid`, which builds and exports the input
 DEM grid, and `ee_to_tif`, which exports individual Earth Engine images using
 a predefined grid definition.
 """
