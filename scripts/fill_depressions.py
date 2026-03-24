@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""
+Depression filling as the first step of DEM hydrological conditioning.
+
+The function `fill_depressions` removes closed depressions in a DEM
+using the Priority-Flood algorithm before subsequent flat resolution.
+"""
+
 import heapq
 from typing import List, Tuple, Union
 
