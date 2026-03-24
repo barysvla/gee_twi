@@ -1,5 +1,12 @@
 from __future__ import annotations
 
+"""
+D8 flow-direction computation for DEM-based flow routing.
+
+This script assigns each cell a single downslope direction using the D8
+approach and defines the drainage network for subsequent flow accumulation.
+"""
+
 from typing import Tuple
 
 import numpy as np
