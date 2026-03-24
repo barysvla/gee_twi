@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+"""
+Utilities for transferring raster data from NumPy to Earth Engine.
+
+This script provides functions for exporting NumPy arrays to Cloud
+Optimized GeoTIFF, uploading them to Google Cloud Storage, and loading
+them into Earth Engine. It is used to integrate locally computed raster
+outputs into the Earth Engine workflow.
+"""
+
 import os
 import tempfile
 import time
