@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+"""
+Utilities for reading, writing, and clipping GeoTIFF rasters.
+
+This script provides helper functions for raster file I/O in the local
+part of the workflow. The functions `save_tif`, `clip_tif`, and `read_tif`
+are used to write NumPy arrays to GeoTIFF, clip rasters to the area of
+interest, and load raster layers back to NumPy arrays with consistent
+NoData handling.
+"""
+
 import os
 from typing import Any, Optional
 
