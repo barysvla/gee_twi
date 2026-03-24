@@ -1,5 +1,14 @@
 from __future__ import annotations
 
+"""
+Utilities for visualizing workflow outputs in Earth Engine and local mode.
+
+This script provides helper functions for displaying raster outputs as
+interactive Earth Engine map layers and as static local plots. It is used
+to prepare visualization parameters, build interactive map views, and
+inspect GeoTIFF results produced by the workflow.
+"""
+
 import os
 import warnings
 from typing import Optional, Sequence, Tuple
