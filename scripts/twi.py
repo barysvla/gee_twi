@@ -1,5 +1,15 @@
 from __future__ import annotations
 
+"""
+Topographic Wetness Index computation for the final workflow output.
+
+This script computes the Topographic Wetness Index (TWI) from flow
+accumulation and slope rasters on a shared grid. It represents the final
+analytical step of the workflow and provides both an Earth Engine-based
+implementation and a NumPy-based implementation for cloud and local
+processing modes.
+"""
+
 from typing import Optional
 
 import ee
