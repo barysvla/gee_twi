@@ -1,5 +1,19 @@
 from __future__ import annotations
 
+"""
+Main entry point of the TWI workflow.
+
+This script coordinates the complete processing pipeline from DEM selection
+and grid export to hydrological conditioning, flow routing, flow accumulation,
+slope computation, and final TWI generation. It also prepares reference layers
+used for comparison and provides two output branches: a local mode producing
+GeoTIFF files and a cloud mode returning Earth Engine layers and an interactive map.
+
+The main function is `run_pipeline`, while the remaining helper functions handle
+DEM selection, reference-layer preparation, flow computation, map assembly,
+and mode-specific output processing.
+"""
+
 from typing import Any
 
 import ee
