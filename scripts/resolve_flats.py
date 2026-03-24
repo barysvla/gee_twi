@@ -1,5 +1,13 @@
 from __future__ import annotations
 
+"""
+Flat resolution as the second step of DEM hydrological conditioning.
+
+This script resolves drainable flat areas in a DEM after depression
+filling so that flow directions can be assigned consistently before
+subsequent flow accumulation.
+"""
+
 from collections import deque
 from typing import Deque, Dict, List, Optional, Tuple
 
