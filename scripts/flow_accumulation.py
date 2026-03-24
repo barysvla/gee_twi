@@ -1,5 +1,18 @@
 from __future__ import annotations
 
+"""
+Flow-accumulation computation for DEM-based flow routing.
+
+This script computes flow accumulation from precomputed flow-direction
+inputs, supporting both D8 (single-flow) and MFD (multiple-flow) routing
+schemes. It is used after flow-direction computation to derive upstream
+contributing area for each cell.
+
+The accumulation is computed using a topological traversal of the flow
+network, ensuring that each cell is evaluated only after all upstream
+contributions have been resolved.
+"""
+
 from collections import deque
 from typing import Literal
 
