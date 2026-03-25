@@ -15,8 +15,9 @@ and mode-specific output processing.
 """
 
 from typing import Any
+from datetime import datetime
 
-import ee
+import ee, os
 import numpy as np
 
 from scripts.fill_depressions import fill_depressions
@@ -24,7 +25,7 @@ from scripts.flow_accumulation import flow_acc
 from scripts.flow_direction_d8 import flow_dir_d8
 from scripts.flow_direction_mfd import flow_dir_mfd_quinn_1991
 from scripts.geotiff_io import clip_tif, read_tif, save_tif
-from scripts.grid_io import ee_to_tif, export_dem_grid
+from scripts.grid_io import export_dem_grid, ee_to_tif
 from scripts.numpy_to_ee import np_to_ee
 from scripts.resolve_flats import resolve_flats_barnes_2014
 from scripts.twi import twi_ee, twi_np
@@ -286,6 +287,7 @@ def _run_local(
     *,
     geom: ee.Geometry,
     grid: dict[str, Any],
+    output_dir: str,
     transform,
     crs,
     nodata_mask,
@@ -304,19 +306,49 @@ def _run_local(
 
     Returns a dictionary containing paths to the generated local outputs.
     """
-    slope_tif = ee_to_tif(
+    # ---------------------------------------------------------------------
+    # Step 0: Prepare local output paths
+    # ---------------------------------------------------------------------
+    out_dir = output_dir
+    os.makedirs(out_dir, exist_ok=True)
+
+    tiles_dir = os.path.join(out_dir, "tiles")
+    os.makedirs(tiles_dir, exist_ok=True)
+
+    slope_tif_path = os.path.join(out_dir, "slope.tif")
+    acc_km2_tif_path = os.path.join(out_dir, "flow_accumulation_km2.tif")
+    twi_tif_path = os.path.join(out_dir, "twi.tif")
+
+    dem_clip_tif_path = os.path.join(out_dir, "dem_clipped.tif")
+    acc_km2_clip_tif_path = os.path.join(out_dir, "acc_km2_clipped.tif")
+    slope_clip_tif_path = os.path.join(out_dir, "slope_clipped.tif")
+    twi_clip_tif_path = os.path.join(out_dir, "twi_clipped.tif")
+
+    merit_upa_tif_path = os.path.join(out_dir, "merit_upa.tif")
+    cti_tif_path = os.path.join(out_dir, "cti.tif")
+
+    # ---------------------------------------------------------------------
+    # Step 1: Export slope raster from Earth Engine and read it locally
+    # ---------------------------------------------------------------------
+    slope_export = ee_to_tif(
         slope_grid_ee,
-        out_path="slope.tif",
+        out_path=slope_tif_path,
         grid=grid,
         unmask_value=None,
         quiet=True,
+        tmp_dir=os.path.join(tiles_dir, "slope"),
+        tile_prefix="slope_tile",
     )
+    slope_tif = slope_export["out_path"]
 
     slope_np = read_tif(
         slope_tif,
         nodata_mask=grid["nodata_mask"],
     )
 
+    # ---------------------------------------------------------------------
+    # Step 2: Compute TWI locally
+    # ---------------------------------------------------------------------
     twi_arr = twi_np(
         acc_np=acc_km2,
         slope_deg_np=slope_np,
@@ -326,6 +358,9 @@ def _run_local(
     )
     print("TWI computed.")
 
+    # ---------------------------------------------------------------------
+    # Step 3: Save local rasters
+    # ---------------------------------------------------------------------
     dem_tif = grid["paths"]["dem_elevations"]
 
     acc_km2_tif = save_tif(
@@ -333,7 +368,7 @@ def _run_local(
         transform,
         crs,
         nodata_mask,
-        filename="flow_accumulation_km2.tif",
+        filename=acc_km2_tif_path,
         band_name="Flow accumulation (km2)",
     )
     twi_tif = save_tif(
@@ -341,50 +376,66 @@ def _run_local(
         transform,
         crs,
         nodata_mask,
-        filename="twi.tif",
+        filename=twi_tif_path,
         band_name="TWI",
     )
 
+    # ---------------------------------------------------------------------
+    # Step 4: Clip rasters to the target geometry
+    # ---------------------------------------------------------------------
     geom_wgs84 = geom.getInfo()
 
     dem_clip_tif = clip_tif(
         dem_tif,
         geom_wgs84,
-        "dem_clipped.tif",
+        dem_clip_tif_path,
         band_name="DEM",
     )
     acc_km2_clip_tif = clip_tif(
         acc_km2_tif,
         geom_wgs84,
-        "acc_km2_clipped.tif",
+        acc_km2_clip_tif_path,
         band_name="Flow accumulation (km2)",
     )
     slope_clip_tif = clip_tif(
         slope_tif,
         geom_wgs84,
-        "slope_clipped.tif",
+        slope_clip_tif_path,
         band_name="Slope",
     )
     twi_clip_tif = clip_tif(
         twi_tif,
         geom_wgs84,
-        "twi_clipped.tif",
+        twi_clip_tif_path,
         band_name="TWI",
     )
 
-    merit_upa_tif = ee_to_tif(
-        ref_layers["merit_upa_grid"],
-        out_path="merit_upa.tif",
+    # ---------------------------------------------------------------------
+    # Step 5: Export reference rasters
+    # ---------------------------------------------------------------------
+    merit_upa_export = ee_to_tif(
+        img=ref_layers["merit_upa_grid"],
+        out_path=merit_upa_tif_path,
         grid=grid,
         quiet=True,
+        tmp_dir=os.path.join(tiles_dir, "merit"),
+        tile_prefix="merit_tile",
     )
-    cti_tif = ee_to_tif(
-        ref_layers["cti_grid"],
-        out_path="cti.tif",
-        grid=grid,
-        quiet=True,
-    )
+    merit_upa_tif = merit_upa_export["out_path"]
 
+    cti_export = ee_to_tif(
+        img=ref_layers["cti_grid"],
+        out_path=cti_tif_path,
+        grid=grid,
+        quiet=True,
+        tmp_dir=os.path.join(tiles_dir, "cti"),
+        tile_prefix="cti_tile",
+    )
+    cti_tif = cti_export["out_path"]
+
+    # ---------------------------------------------------------------------
+    # Step 6: Plot final TWI
+    # ---------------------------------------------------------------------
     print("Plotting TWI (local mode, percentile stretch).")
     plot_raster(
         twi_clip_tif,
@@ -396,6 +447,7 @@ def _run_local(
 
     return {
         "mode": "local",
+        "output_dir": out_dir,
         "dem": dem_clip_tif,
         "slope": slope_clip_tif,
         "flow_accumulation_km2": acc_km2_clip_tif,
@@ -405,6 +457,11 @@ def _run_local(
         "transform": transform,
         "crs": crs,
         "nodata_mask": nodata_mask,
+        "export_info": {
+            "slope": slope_export,
+            "MERIT_flow_accumulation_upa": merit_upa_export,
+            "cti_Hydrography90m": cti_export,
+        },
     }
 
 
@@ -415,6 +472,7 @@ def run_pipeline(
     dem_source: str = "FABDEM",
     flow_method: str = "mfd_quinn_1991",
     use_bucket: bool = False,
+    output_dir: str | None = None,
 ) -> dict[str, Any]:
     """
     Run the complete TWI workflow for the selected DEM source and routing method.
@@ -466,6 +524,9 @@ def run_pipeline(
     use_bucket : bool, default=False
         If True, upload local rasters to Cloud Storage and continue in
         Earth Engine. If False, keep outputs as local GeoTIFF files.
+    output_dir : str, optional
+        Output directory for local results. If None, a timestamped
+        directory is created in `outputs/`.
 
     Returns
     -------
@@ -483,6 +544,12 @@ def run_pipeline(
 
     geom = geometry
     geom_acc = accum_geometry if accum_geometry is not None else geom
+
+    if output_dir is None:
+        run_name = datetime.now().strftime("run_%Y%m%d_%H%M%S")
+        output_dir = os.path.join("outputs", run_name)
+
+    os.makedirs(output_dir, exist_ok=True)
 
     # ---------------------------------------------------------------------
     # Step 1: Select DEM source and export aligned input grids
@@ -525,7 +592,7 @@ def run_pipeline(
     )
     print("Depression filling completed.")
 
-    dem_res_np, flat_mask, labels, flowdirs, stats = resolve_flats_barnes_2014(
+    dem_res_np, _, _, _, _ = resolve_flats_barnes_2014(
         dem_fill_np,
         nodata=np.nan,
         equal_tol=0.0,
@@ -535,8 +602,6 @@ def run_pipeline(
         epsilon=1e-5,
     )
     print("Flat resolution completed.")
-
-    _ = flat_mask, labels, flowdirs, stats
 
     # ---------------------------------------------------------------------
     # Step 4: Compute flow direction and flow accumulation
@@ -579,6 +644,7 @@ def run_pipeline(
     return _run_local(
         geom=geom,
         grid=grid,
+        output_dir=output_dir,
         transform=transform,
         crs=crs,
         nodata_mask=nodata_mask,
@@ -586,7 +652,6 @@ def run_pipeline(
         acc_km2=acc_km2,
         ref_layers=ref_layers,
     )
-
 
 if __name__ == "__main__":
     _ = run_pipeline()
