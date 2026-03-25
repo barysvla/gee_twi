@@ -7,7 +7,7 @@ The workflow allows the user to select an area of interest, choose the DEM
 source and flow routing method, and export terrain-derived outputs 
 such as slope, flow accumulation, and TWI.
 
-[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/barysvla/gee_twi/blob/main/notebooks/gee_twi_workflow.ipynb)
+[![Open in Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/barysvla/gee_twi/blob/main/notebooks/gee_twi_workflow.ipynb) 
 
 Open the notebook in Google Colab using the badge above, save a copy to your Google Drive, and follow the step-by-step instructions provided directly in the notebook.
 
