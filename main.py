@@ -17,7 +17,9 @@ and mode-specific output processing.
 from typing import Any
 from datetime import datetime
 
-import ee, os
+import os
+
+import ee
 import numpy as np
 
 from scripts.fill_depressions import fill_depressions
@@ -32,7 +34,9 @@ from scripts.twi import twi_ee, twi_np
 from scripts.visualization import plot_raster, show_map, vis_sigma
 
 
-def _select_dem_src(dem_source: str):
+def _select_dem_src(
+    dem_source: str,
+) -> ee.Image | ee.ImageCollection:
     """Return the requested DEM source as an Earth Engine image or image collection."""
     if dem_source == "FABDEM":
         return ee.ImageCollection("projects/sat-io/open-datasets/FABDEM")
@@ -234,11 +238,29 @@ def _run_cloud(
     """
     Run the cloud output branch of the workflow.
 
-    This function uploads the locally computed flow-accumulation raster back to
-    Earth Engine, computes TWI in cloud mode, and prepares interactive map
-    layers for visualization. It returns a dictionary containing the final
-    Earth Engine outputs and the map object.
+    This function uploads the locally computed flow-accumulation raster
+    to Earth Engine, computes TWI in cloud mode, and prepares the final
+    interactive map output.
+
+    The procedure consists of the following steps:
+
+    Step 0
+        Upload flow accumulation raster to Earth Engine.
+
+    Step 1
+        Compute and clip the Topographic Wetness Index (TWI).
+
+    Step 2
+        Build the interactive map and return the final outputs.
+
+    Returns
+    -------
+    dict
+        Dictionary containing Earth Engine outputs and map object.
     """
+    # ---------------------------------------------------------------------
+    # Step 0: Upload flow accumulation raster to Earth Engine
+    # ---------------------------------------------------------------------
     acc_km2_res = np_to_ee(
         acc_km2,
         transform=transform,
@@ -254,9 +276,15 @@ def _run_cloud(
     acc_km2_ee_full = acc_km2_res["image"]
     acc_km2_ee = acc_km2_ee_full.clip(geom)
 
+    # ---------------------------------------------------------------------
+    # Step 1: Compute and clip TWI
+    # ---------------------------------------------------------------------
     twi = twi_ee(acc_km2_ee, slope_ee).clip(geom)
     print("TWI computed.")
 
+    # ---------------------------------------------------------------------
+    # Step 2: Build map and return final outputs
+    # ---------------------------------------------------------------------
     map_obj = _build_cloud_map(
         geom=geom,
         scale=scale,
@@ -298,13 +326,37 @@ def _run_local(
     """
     Run the local output branch of the workflow.
 
-    This function exports the slope raster from Earth Engine, computes TWI
-    locally from slope and flow-accumulation arrays, and saves the main
-    outputs as GeoTIFF files. The rasters are then clipped to the target
-    geometry, reference layers are exported for comparison, and the final
-    TWI output is displayed as a local plot.
+    This function performs local post-processing of the workflow outputs,
+    including export of slope, computation of TWI, raster saving, clipping,
+    and visualization.
 
-    Returns a dictionary containing paths to the generated local outputs.
+    The procedure consists of the following steps:
+
+    Step 0
+        Prepare output directory structure for the current run.
+
+    Step 1
+        Export slope raster from Earth Engine and load it as a NumPy array.
+
+    Step 2
+        Compute the Topographic Wetness Index (TWI) from local arrays.
+
+    Step 3
+        Save flow accumulation and TWI rasters as GeoTIFF files.
+
+    Step 4
+        Clip all rasters to the target geometry.
+
+    Step 5
+        Export reference rasters (MERIT UPA and CTI).
+
+    Step 6
+        Visualize the final TWI raster.
+
+    Returns
+    -------
+    dict
+        Dictionary containing paths to local output rasters and metadata.
     """
     # ---------------------------------------------------------------------
     # Step 0: Prepare local output paths
@@ -652,6 +704,7 @@ def run_pipeline(
         acc_km2=acc_km2,
         ref_layers=ref_layers,
     )
+
 
 if __name__ == "__main__":
     _ = run_pipeline()
