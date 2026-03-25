@@ -59,17 +59,25 @@ The workflow consists of several sequential steps executed in the Colab notebook
 5. **Flow routing and accumulation computation**  
    Flow routing is computed using either the **D8 (single-flow direction)** algorithm or the **multiple-flow direction (MFD)** method proposed by Quinn et al. (1991). The resulting flow distribution is then used to compute the upslope contributing area.
 
-6. **Slope and TWI computation**  
-   Terrain slope is calculated from the DEM and combined with flow accumulation to compute the Topographic Wetness Index:
+6. **Slope computation**  
+   Terrain slope is derived from the DEM using the Earth Engine function `ee.Terrain.slope`, which computes slope in degrees on the target grid.
+
+7. **TWI computation**  
+   After slope computation, the workflow branches into two execution modes depending on the availability of an active Google Cloud billing account:
+
+   - **Cloud mode (GEE)** – TWI is computed server-side using Earth Engine  
+   - **Local mode (NumPy)** – DEM-derived data are exported and TWI is computed locally in the Colab environment
+
+   The Topographic Wetness Index is defined as:
 
       `TWI = ln(a / tan β)`
       
       where  
       - `a` — upslope contributing area per unit contour width  
       - `β` — slope (radians)
-  
-7. **Visualization and export**  
-   Results are visualized in an interactive Earth Engine map and can be exported as GeoTIFF files either to Google Drive or to local storage.
+
+8. **Visualization and export**  
+   Results are visualized either in the interactive Earth Engine map or locally, and can be exported as GeoTIFF files to Google Drive or local storage.
 
 ## Execution model
 
