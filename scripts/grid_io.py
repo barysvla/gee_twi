@@ -1,24 +1,32 @@
 from __future__ import annotations
 
 """
-Utilities for exporting grid-aligned raster data from Earth Engine.
+Utilities for exporting grid-aligned rasters from Earth Engine.
 
-This script provides helper functions for transferring raster layers from
-Earth Engine to local GeoTIFF files and NumPy arrays while preserving a
-shared spatial grid. It is used to prepare aligned DEM and pixel-area inputs
-for the workflow and to export additional Earth Engine layers to the same
-grid during later processing steps.
+This module prepares a shared raster grid for the workflow and exports
+Earth Engine images to local GeoTIFF files aligned to that grid.
+Direct HTTP export is attempted first. If the request exceeds the
+download-size limit, the export automatically falls back to tiled
+download, local tile normalization, and raster assembly.
 
-The functions are `export_dem_grid`, which builds and exports the input
-DEM grid, and `ee_to_tif`, which exports individual Earth Engine images using
-a predefined grid definition.
+Public functions
+----------------
+export_dem_grid
+    Build a grid-locked DEM and pixel-area raster and load them as
+    aligned NumPy arrays.
+
+ee_to_tif
+    Export a single Earth Engine image to a GeoTIFF aligned to a
+    predefined grid, with automatic fallback to tiled export when needed.
 """
 
 import contextlib
 import io
 import logging
+import math
 import os
 import re
+import shutil
 import tempfile
 from typing import Any, Dict, Optional, Union
 
@@ -26,6 +34,23 @@ import ee
 import geemap
 import numpy as np
 import rasterio
+from rasterio.windows import Window
+
+
+# Conservative defaults for direct HTTP export fallback planning.
+_TILE_HARD_LIMIT_BYTES = 32 * 1024 * 1024
+_TILE_SAFETY_FACTOR = 0.7
+_TILE_MAX_DIM = 10000
+_TILE_MAX_RETRIES = 4
+_TILE_REFINE_MODE = "double"
+
+
+class EarthEngineExportError(RuntimeError):
+    """Raised when an Earth Engine export fails."""
+
+
+class EarthEngineSizeLimitError(EarthEngineExportError):
+    """Raised when a direct Earth Engine download exceeds the size limit."""
 
 
 def export_dem_grid(
@@ -42,48 +67,17 @@ def export_dem_grid(
     quiet: bool = True,
 ) -> Dict[str, Any]:
     """
-    Export DEM elevation and pixel-area rasters from Earth Engine to aligned arrays.
+    Export a DEM and a matching pixel-area raster to aligned NumPy arrays.
 
-    This function exports a DEM layer and the corresponding pixel-area
-    layer from Earth Engine using a shared spatial grid. The workflow
-    normalizes the input source to a single image, derives a stable
-    projection, optionally aligns the export region to the raster grid,
-    exports both layers as GeoTIFFs, and reads them back as NumPy arrays.
+    The function normalizes the DEM source to a single Earth Engine image,
+    derives a stable reference projection, optionally aligns the export
+    region to the DEM grid, constructs grid-locked DEM and pixel-area
+    images, exports both rasters to GeoTIFF, and reads them back as
+    aligned arrays.
 
-    The procedure consists of the following steps:
-
-    Step 0
-        Optionally suppress verbose logging from geemap and Google
-        client libraries.
-
-    Step 1
-        Normalize the input source to a single Earth Engine image and
-        derive a stable reference projection.
-
-    Step 2
-        Optionally align the export region to the DEM grid.
-
-    Step 3
-        Extract projection metadata and construct the export-grid
-        definition.
-
-    Step 4
-        Apply the requested resampling method to the DEM.
-
-    Step 5
-        Reproject and clip the DEM and pixel-area layers to the same
-        grid.
-
-    Step 6
-        Prepare output paths and export both layers to GeoTIFF.
-
-    Step 7
-        Read the exported rasters back to NumPy arrays and verify that
-        both rasters are spatially aligned.
-
-    Step 8
-        Normalize DEM NoData values to NaN and construct the output
-        dictionary.
+    Export uses `ee_to_tif()`, which first attempts a standard direct
+    download and automatically switches to tiled export only when the
+    direct request exceeds the HTTP response-size limit.
 
     Parameters
     ----------
@@ -91,18 +85,18 @@ def export_dem_grid(
         DEM source. A string is interpreted as an Earth Engine image
         collection identifier.
     region_geom : ee.Geometry
-        Export region.
+        Region to export.
     band : str, optional
         Band name to select from the source image or collection.
     resample_method : {"nearest", "bilinear", "bicubic"}, default="bilinear"
-        Resampling method applied to the DEM before export.
+        Resampling method applied to the DEM before reprojection.
     nodata_value : float, default=-9999.0
-        Numeric value used to materialize DEM NoData during export.
+        Value used to materialize DEM NoData during export.
     snap_region_to_grid : bool, default=True
         If True, align the export region to the DEM grid.
     tmp_dir : str, optional
-        Directory used for temporary GeoTIFF outputs. If None, a new
-        temporary directory is created.
+        Directory for GeoTIFF outputs. If None, a temporary directory
+        is created.
     dem_filename : str, default="dem_elevations.tif"
         Output filename for the DEM raster.
     px_filename : str, default="pixel_area.tif"
@@ -114,25 +108,19 @@ def export_dem_grid(
     Returns
     -------
     result : dict
-        Dictionary with the following keys:
-            - "dem_elevations_np": DEM array of shape (H, W), float64,
-              with NaN as NoData
-            - "pixel_area_m2_np": pixel-area array of shape (H, W), float64
-            - "transform": rasterio Affine transform
-            - "crs": raster CRS
-            - "nodata_mask": boolean NoData mask of shape (H, W)
-            - "nodata_value_raw": raw DEM NoData value read from GeoTIFF
-            - "projection_info": {"crs": str, "transform": list | None}
-            - "scale_m": export scale in metres or None
-            - "region_used": export region actually used
-            - "ee_dem_grid": grid-locked Earth Engine DEM image
-            - "ee_px_area_grid": grid-locked Earth Engine pixel-area image
-            - "paths": output paths for both GeoTIFF files
-            - "tmp_dir": temporary directory actually used
+        Dictionary with aligned DEM and pixel-area arrays, raster
+        metadata, Earth Engine grid images, output paths, and export
+        diagnostics. The main keys are:
+            - "dem_elevations_np"
+            - "pixel_area_m2_np"
+            - "transform"
+            - "crs"
+            - "nodata_mask"
+            - "ee_dem_grid"
+            - "ee_px_area_grid"
+            - "paths"
+            - "export_info"
     """
-    # ---------------------------------------------------------------------
-    # Step 0: Optionally suppress external library logging
-    # ---------------------------------------------------------------------
     previous_levels: dict[str, int] = {}
     if quiet:
         for name in ("google", "googleapiclient", "geemap"):
@@ -141,9 +129,7 @@ def export_dem_grid(
             logger.setLevel(logging.ERROR)
 
     try:
-        # -----------------------------------------------------------------
-        # Step 1: Normalize the source and derive a stable projection
-        # -----------------------------------------------------------------
+        # Normalize the source to a single DEM image and derive its projection.
         if isinstance(src, ee.image.Image):
             dem_image = src if band is None else src.select([band])
             reference_image = dem_image
@@ -158,9 +144,7 @@ def export_dem_grid(
         proj = ee.Image(reference_image).projection()
         dem_image = ee.Image(dem_image).setDefaultProjection(proj)
 
-        # -----------------------------------------------------------------
-        # Step 2: Optionally align the export region to the DEM grid
-        # -----------------------------------------------------------------
+        # Align the region to the DEM grid when requested.
         if snap_region_to_grid:
             mask = ee.Image.constant(1).reproject(proj).clip(region_geom).selfMask()
             aligned_geometry = mask.geometry().transform(proj=proj, maxError=1)
@@ -168,9 +152,7 @@ def export_dem_grid(
         else:
             region_aligned = region_geom
 
-        # -----------------------------------------------------------------
-        # Step 3: Extract projection metadata and define the export grid
-        # -----------------------------------------------------------------
+        # Build the reusable export-grid definition.
         proj_info = proj.getInfo()
         crs = proj_info["crs"]
         crs_transform = proj_info.get("transform", None)
@@ -185,11 +167,8 @@ def export_dem_grid(
             "scale_m": scale_m,
         }
 
-        # -----------------------------------------------------------------
-        # Step 4: Apply the DEM resampling method
-        # -----------------------------------------------------------------
+        # Apply the requested DEM resampling method.
         resample_method_norm = (resample_method or "").lower()
-
         if resample_method_norm in ("bilinear", "bicubic"):
             dem_resampled = ee.Image(dem_image).resample(resample_method_norm)
         elif resample_method_norm in ("nearest", ""):
@@ -200,9 +179,7 @@ def export_dem_grid(
                 "Use 'nearest', 'bilinear', or 'bicubic'."
             )
 
-        # -----------------------------------------------------------------
-        # Step 5: Reproject and clip DEM and pixel-area rasters
-        # -----------------------------------------------------------------
+        # Reproject DEM and pixel-area rasters to the shared grid.
         if crs_transform is not None:
             ee_dem_grid = (
                 ee.Image(dem_resampled)
@@ -211,7 +188,6 @@ def export_dem_grid(
                 .clip(region_aligned)
                 .updateMask(ee.Image(dem_image).mask())
             )
-
             ee_px_area_grid = (
                 ee.Image.pixelArea()
                 .toFloat()
@@ -227,7 +203,6 @@ def export_dem_grid(
                 .clip(region_aligned)
                 .updateMask(ee.Image(dem_image).mask())
             )
-
             ee_px_area_grid = (
                 ee.Image.pixelArea()
                 .toFloat()
@@ -236,31 +211,30 @@ def export_dem_grid(
                 .clip(region_aligned)
             )
 
-        # -----------------------------------------------------------------
-        # Step 6: Prepare output paths and export GeoTIFF files
-        # -----------------------------------------------------------------
         if tmp_dir is None:
             tmp_dir = tempfile.mkdtemp()
 
         dem_path = os.path.join(tmp_dir, dem_filename)
         pixel_area_path = os.path.join(tmp_dir, px_filename)
 
-        ee_to_tif(
-            ee_dem_grid.unmask(nodata_value),
+        dem_export_info = ee_to_tif(
+            img=ee_dem_grid.unmask(nodata_value),
             out_path=dem_path,
             grid=export_grid,
             quiet=quiet,
+            tile_prefix="dem_tile",
+            tmp_dir=os.path.join(tmp_dir, "dem_tiles"),
         )
-        ee_to_tif(
-            ee_px_area_grid,
+        px_export_info = ee_to_tif(
+            img=ee_px_area_grid,
             out_path=pixel_area_path,
             grid=export_grid,
             quiet=quiet,
+            tile_prefix="px_tile",
+            tmp_dir=os.path.join(tmp_dir, "px_tiles"),
         )
 
-        # -----------------------------------------------------------------
-        # Step 7: Read GeoTIFFs and verify raster alignment
-        # -----------------------------------------------------------------
+        # Read outputs back and verify alignment.
         with rasterio.open(dem_path) as src_dem:
             dem_raw_data = src_dem.read(1).astype(np.float64)
             transform = src_dem.transform
@@ -269,7 +243,6 @@ def export_dem_grid(
 
         with rasterio.open(pixel_area_path) as src_px:
             pixel_area_data = src_px.read(1).astype(np.float64)
-
             if (
                 src_px.transform != transform
                 or src_px.crs != out_crs
@@ -281,9 +254,6 @@ def export_dem_grid(
                     "(transform, CRS, or shape mismatch)."
                 )
 
-        # -----------------------------------------------------------------
-        # Step 8: Normalize DEM NoData values and build the output
-        # -----------------------------------------------------------------
         nodata_value_raw = nd_src if nd_src is not None else float(nodata_value)
         nodata_mask = (dem_raw_data == nodata_value_raw) | ~np.isfinite(dem_raw_data)
 
@@ -306,6 +276,10 @@ def export_dem_grid(
                 "dem_elevations": dem_path,
                 "pixel_area": pixel_area_path,
             },
+            "export_info": {
+                "dem_elevations": dem_export_info,
+                "pixel_area": px_export_info,
+            },
             "tmp_dir": tmp_dir,
         }
 
@@ -322,37 +296,20 @@ def ee_to_tif(
     grid: dict[str, Any],
     unmask_value: float | None = None,
     quiet: bool = True,
-) -> str:
+    force_tiled: bool = False,
+    force_standard: bool = False,
+    tmp_dir: Optional[str] = None,
+    tile_prefix: str = "tile",
+    remove_tile_dirs: bool = False,
+) -> Dict[str, Any]:
     """
-    Export an Earth Engine image to a GeoTIFF aligned to a predefined grid.
+    Export an Earth Engine image to a grid-aligned GeoTIFF.
 
-    This function exports a single Earth Engine image using an explicit
-    grid definition so that multiple raster layers can be written with
-    identical CRS, transform or scale, and region extent.
-
-    The procedure consists of the following steps:
-
-    Step 0
-        Validate the grid definition and derive export parameters.
-
-    Step 1
-        Ensure that the output directory exists.
-
-    Step 2
-        Optionally suppress verbose logging from geemap and Google
-        client libraries.
-
-    Step 3
-        Prepare the export image, optionally materializing NoData by
-        unmasking with a numeric value.
-
-    Step 4
-        Export the image to GeoTIFF and capture export logs when
-        requested.
-
-    Step 5
-        Verify that the output file was created and raise a descriptive
-        error if the export failed.
+    The function first tries a standard direct HTTP export. If the
+    request exceeds the Earth Engine response-size limit, it
+    automatically switches to tiled export, crops each downloaded tile
+    to the expected raster window, and assembles the final GeoTIFF
+    locally.
 
     Parameters
     ----------
@@ -361,25 +318,177 @@ def ee_to_tif(
     out_path : str
         Target GeoTIFF path.
     grid : dict
-        Grid definition. Required keys:
+        Grid definition with:
             - "projection_info": {"crs": str, "transform": list | None}
             - "region_used": ee.Geometry
-        Optional keys:
-            - "scale_m": float, required if transform is not available
+        and optionally:
+            - "scale_m": float
     unmask_value : float, optional
-        Value used in `img.unmask(unmask_value)` before export.
+        Value passed to `img.unmask(unmask_value)` before export.
     quiet : bool, default=True
         If True, suppress verbose logging from geemap and Google client
         libraries during export.
+    force_tiled : bool, default=False
+        If True, skip direct export and use tiled export immediately.
+        Intended mainly for testing.
+    force_standard : bool, default=False
+        If True, disable tiled fallback and raise the original direct
+        export error instead. Intended mainly for testing.
+    tmp_dir : str, optional
+        Directory for temporary tile outputs when tiled export is used.
+    tile_prefix : str, default="tile"
+        Prefix used for temporary tile filenames.
+    remove_tile_dirs : bool, default=False
+        If True, delete temporary tiled-export directories after success.
 
     Returns
     -------
-    out_path : str
-        Path to the created GeoTIFF.
+    result : dict
+        Export diagnostics with at least:
+            - "mode": "standard" or "tiled"
+            - "out_path": final GeoTIFF path
+            - "n_cols", "n_rows": tile grid size
+            - "attempt": successful tiled-export attempt index or 0
+            - "standard_error": direct-export error text or None
+            - "attempt_history": tiled retry history
     """
-    # ---------------------------------------------------------------------
-    # Step 0: Validate the grid definition and derive export parameters
-    # ---------------------------------------------------------------------
+    if force_tiled and force_standard:
+        raise ValueError("force_tiled and force_standard cannot both be True.")
+
+    standard_error: Exception | None = None
+
+    if not force_tiled:
+        try:
+            _ee_to_tif_standard(
+                img=img,
+                out_path=out_path,
+                grid=grid,
+                unmask_value=unmask_value,
+                quiet=quiet,
+            )
+            return {
+                "mode": "standard",
+                "out_path": out_path,
+                "n_cols": 1,
+                "n_rows": 1,
+                "attempt": 0,
+                "standard_error": None,
+                "attempt_history": [],
+            }
+        except Exception as exc:
+            standard_error = exc
+            if force_standard:
+                raise
+            if not isinstance(exc, EarthEngineSizeLimitError):
+                raise
+
+    full_transform, full_width, full_height = _grid_transform_and_shape(grid)
+
+    plan = _suggest_tile_grid(
+        width=full_width,
+        height=full_height,
+        band_count=1,
+        bytes_per_pixel=4,
+        hard_limit_bytes=_TILE_HARD_LIMIT_BYTES,
+        safety_factor=_TILE_SAFETY_FACTOR,
+        max_tile_dim=_TILE_MAX_DIM,
+    )
+
+    n_cols = plan["n_cols"]
+    n_rows = plan["n_rows"]
+
+    if tmp_dir is None:
+        tmp_dir = tempfile.mkdtemp(prefix="ee_auto_export_")
+    else:
+        os.makedirs(tmp_dir, exist_ok=True)
+
+    attempt_history: list[dict[str, Any]] = []
+
+    for attempt in range(1, _TILE_MAX_RETRIES + 1):
+        attempt_dir = os.path.join(tmp_dir, f"attempt_{attempt}_{n_rows}x{n_cols}")
+        os.makedirs(attempt_dir, exist_ok=True)
+
+        try:
+            tiled_res = _export_ee_tiled(
+                img=img,
+                out_path=out_path,
+                grid=grid,
+                full_transform=full_transform,
+                full_width=full_width,
+                full_height=full_height,
+                n_cols=n_cols,
+                n_rows=n_rows,
+                tmp_dir=attempt_dir,
+                tile_prefix=tile_prefix,
+                unmask_value=unmask_value,
+                quiet=quiet,
+            )
+
+            result = {
+                "mode": "tiled",
+                "out_path": out_path,
+                "n_cols": n_cols,
+                "n_rows": n_rows,
+                "attempt": attempt,
+                "tmp_dir": attempt_dir,
+                "tile_paths": tiled_res["tile_paths"],
+                "standard_error": repr(standard_error) if standard_error is not None else None,
+                "attempt_history": attempt_history,
+                "plan": {
+                    "tile_width": math.ceil(full_width / n_cols),
+                    "tile_height": math.ceil(full_height / n_rows),
+                    "tile_bytes_est": _estimate_raster_bytes(
+                        math.ceil(full_width / n_cols),
+                        math.ceil(full_height / n_rows),
+                    ),
+                    "total_bytes_est": _estimate_raster_bytes(full_width, full_height),
+                },
+            }
+
+            if remove_tile_dirs:
+                for name in os.listdir(tmp_dir):
+                    path = os.path.join(tmp_dir, name)
+                    if os.path.isdir(path):
+                        shutil.rmtree(path, ignore_errors=True)
+
+            return result
+
+        except Exception as exc:
+            attempt_history.append(
+                {
+                    "attempt": attempt,
+                    "n_cols": n_cols,
+                    "n_rows": n_rows,
+                    "error": repr(exc),
+                }
+            )
+            n_cols, n_rows = _refine_tile_grid(n_cols, n_rows, mode=_TILE_REFINE_MODE)
+
+    error_lines = ["Automatic EE export failed.", ""]
+    if standard_error is not None:
+        error_lines.extend(["Standard export error:", repr(standard_error), ""])
+    else:
+        error_lines.extend(["Standard export was skipped.", ""])
+
+    error_lines.append("Tiled export attempts:")
+    for item in attempt_history:
+        error_lines.append(
+            f"  attempt={item['attempt']}, grid={item['n_rows']}x{item['n_cols']}, "
+            f"error={item['error']}"
+        )
+
+    raise RuntimeError("\n".join(error_lines))
+
+
+def _ee_to_tif_standard(
+    img: ee.Image,
+    *,
+    out_path: str,
+    grid: dict[str, Any],
+    unmask_value: float | None = None,
+    quiet: bool = True,
+) -> str:
+    """Export an image with a single direct Earth Engine HTTP request."""
     for key in ("projection_info", "region_used"):
         if key not in grid:
             raise KeyError(f"grid is missing required key: '{key}'")
@@ -387,10 +496,10 @@ def ee_to_tif(
     proj_info = grid["projection_info"]
     crs_str = proj_info["crs"]
     crs_transform = proj_info.get("transform", None)
-    region_aligned = grid["region_used"]
+    region = grid["region_used"]
 
     export_kwargs: dict[str, Any] = {
-        "region": region_aligned,
+        "region": region,
         "file_per_band": False,
     }
 
@@ -403,20 +512,13 @@ def ee_to_tif(
             raise KeyError(
                 "grid must contain 'scale_m' when projection_info.transform is None."
             )
-
         export_kwargs["crs"] = crs_str
         export_kwargs["scale"] = float(scale_m)
 
-    # ---------------------------------------------------------------------
-    # Step 1: Ensure that the output directory exists
-    # ---------------------------------------------------------------------
     out_dir = os.path.dirname(out_path)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
 
-    # ---------------------------------------------------------------------
-    # Step 2: Optionally suppress external library logging
-    # ---------------------------------------------------------------------
     previous_levels: dict[str, int] = {}
     if quiet:
         for name in ("google", "googleapiclient", "geemap"):
@@ -425,14 +527,11 @@ def ee_to_tif(
             logger.setLevel(logging.ERROR)
 
     try:
-        # -----------------------------------------------------------------
-        # Step 3: Prepare the export image
-        # -----------------------------------------------------------------
         export_img = img.unmask(unmask_value) if unmask_value is not None else img
 
-        # -----------------------------------------------------------------
-        # Step 4: Export the image and optionally capture logs
-        # -----------------------------------------------------------------
+        if os.path.exists(out_path):
+            os.remove(out_path)
+
         log_text = ""
         if quiet:
             sink = io.StringIO()
@@ -442,59 +541,344 @@ def ee_to_tif(
         else:
             geemap.ee_export_image(export_img, filename=out_path, **export_kwargs)
 
-        # -----------------------------------------------------------------
-        # Step 5: Verify that the output file was created
-        # -----------------------------------------------------------------
-        if not os.path.exists(out_path):
-            reported_total = None
-            reported_limit = None
+        if os.path.exists(out_path):
+            return out_path
 
+        reported_total = None
+        reported_limit = None
+
+        match = re.search(
+            (
+                r"Total request size\s*\((\d+)\s*bytes\)\s*"
+                r"must be less than or equal to\s*(\d+)\s*bytes"
+            ),
+            log_text,
+        )
+        if match:
+            reported_total = int(match.group(1))
+            reported_limit = int(match.group(2))
+        else:
             match = re.search(
-                (
-                    r"Total request size\s*\((\d+)\s*bytes\)\s*"
-                    r"must be less than or equal to\s*(\d+)\s*bytes"
-                ),
+                r"Total request size\s*must be less than or equal to\s*(\d+)\s*bytes",
                 log_text,
             )
             if match:
-                reported_total = int(match.group(1))
-                reported_limit = int(match.group(2))
-            else:
-                match = re.search(
-                    (
-                        r"Total request size\s*must be less than or equal to\s*"
-                        r"(\d+)\s*bytes"
-                    ),
-                    log_text,
-                )
-                if match:
-                    reported_limit = int(match.group(1))
+                reported_limit = int(match.group(1))
 
-            msg = (
-                f"Earth Engine export failed: '{out_path}' was not created.\n"
-                "A common cause is exceeding the HTTP response size limit.\n"
+        msg = f"Earth Engine export failed: '{out_path}' was not created.\n"
+
+        if reported_total is not None and reported_limit is not None:
+            msg += (
+                f"Reported by Earth Engine: total request size = {reported_total} bytes, "
+                f"limit = {reported_limit} bytes.\n"
+                f"Reduce the request by at least {reported_total - reported_limit} bytes.\n"
             )
+            raise EarthEngineSizeLimitError(msg)
 
-            if reported_total is not None and reported_limit is not None:
-                msg += (
-                    f"Reported by Earth Engine: total request size = {reported_total} bytes, "
-                    f"limit = {reported_limit} bytes.\n"
-                    f"Reduce the request by at least {reported_total - reported_limit} bytes "
-                    "(smaller region and/or coarser resolution).\n"
-                )
-            elif reported_limit is not None:
-                msg += (
-                    "Reported by Earth Engine: total request size must be less than "
-                    f"or equal to {reported_limit} bytes.\n"
-                )
-            elif log_text.strip():
-                msg += "Captured Earth Engine or geemap log output:\n" + log_text + "\n"
+        if reported_limit is not None:
+            msg += (
+                "Reported by Earth Engine: total request size must be less than "
+                f"or equal to {reported_limit} bytes.\n"
+            )
+            raise EarthEngineSizeLimitError(msg)
 
-            raise RuntimeError(msg)
+        if log_text.strip():
+            msg += "Captured Earth Engine or geemap log output:\n" + log_text + "\n"
 
-        return out_path
+        raise EarthEngineExportError(msg)
 
     finally:
         if quiet:
             for name, level in previous_levels.items():
                 logging.getLogger(name).setLevel(level)
+
+
+def _estimate_raster_bytes(
+    width: int,
+    height: int,
+    band_count: int = 1,
+    bytes_per_pixel: int = 4,
+) -> int:
+    """Estimate raster size in bytes."""
+    return int(width) * int(height) * int(band_count) * int(bytes_per_pixel)
+
+
+def _compute_safe_tile_budget(
+    hard_limit_bytes: int = _TILE_HARD_LIMIT_BYTES,
+    safety_factor: float = _TILE_SAFETY_FACTOR,
+) -> int:
+    """Compute a conservative per-tile byte budget."""
+    return int(hard_limit_bytes * safety_factor)
+
+
+def _suggest_tile_grid(
+    width: int,
+    height: int,
+    *,
+    band_count: int = 1,
+    bytes_per_pixel: int = 4,
+    hard_limit_bytes: int = _TILE_HARD_LIMIT_BYTES,
+    safety_factor: float = _TILE_SAFETY_FACTOR,
+    max_tile_dim: int = _TILE_MAX_DIM,
+) -> Dict[str, int]:
+    """
+    Suggest a near-square tile grid that satisfies byte and dimension limits.
+    """
+    max_tile_bytes = _compute_safe_tile_budget(hard_limit_bytes, safety_factor)
+
+    total_bytes = _estimate_raster_bytes(
+        width,
+        height,
+        band_count=band_count,
+        bytes_per_pixel=bytes_per_pixel,
+    )
+
+    n_tiles = max(1, math.ceil(total_bytes / max_tile_bytes))
+    n_cols = math.ceil(math.sqrt(n_tiles))
+    n_rows = math.ceil(n_tiles / n_cols)
+
+    while math.ceil(width / n_cols) > max_tile_dim:
+        n_cols += 1
+    while math.ceil(height / n_rows) > max_tile_dim:
+        n_rows += 1
+
+    tile_width = math.ceil(width / n_cols)
+    tile_height = math.ceil(height / n_rows)
+
+    return {
+        "n_cols": n_cols,
+        "n_rows": n_rows,
+        "tile_width": tile_width,
+        "tile_height": tile_height,
+        "tile_bytes_est": _estimate_raster_bytes(
+            tile_width,
+            tile_height,
+            band_count=band_count,
+            bytes_per_pixel=bytes_per_pixel,
+        ),
+        "total_bytes_est": total_bytes,
+        "max_tile_bytes": max_tile_bytes,
+    }
+
+
+def _refine_tile_grid(n_cols: int, n_rows: int, mode: str = _TILE_REFINE_MODE) -> tuple[int, int]:
+    """Refine a tile grid for another retry attempt."""
+    if mode == "double":
+        return n_cols * 2, n_rows * 2
+    if mode == "increment":
+        return n_cols + 1, n_rows + 1
+    raise ValueError("Unsupported refine mode. Use 'double' or 'increment'.")
+
+
+def _grid_transform_and_shape(grid: dict[str, Any]) -> tuple[rasterio.Affine, int, int]:
+    """
+    Derive the cropped raster transform and shape from a grid definition.
+
+    Tiled fallback requires an explicit projection transform. Grid
+    definitions based only on scale are not supported here.
+    """
+    proj_info = grid["projection_info"]
+    crs_str = proj_info["crs"]
+    crs_transform = proj_info.get("transform", None)
+    region = grid["region_used"]
+
+    if crs_transform is None:
+        raise ValueError(
+            "Automatic tiled export requires projection_info['transform']. "
+            "Grid definitions based only on scale are not supported."
+        )
+
+    base_transform = rasterio.Affine(*crs_transform)
+
+    region_proj = region.bounds(maxError=1, proj=ee.Projection(crs_str))
+    coords = region_proj.coordinates().getInfo()[0]
+
+    xs = [pt[0] for pt in coords]
+    ys = [pt[1] for pt in coords]
+
+    xmin, xmax = min(xs), max(xs)
+    ymin, ymax = min(ys), max(ys)
+
+    col_min_f, row_top_f = ~base_transform * (xmin, ymax)
+    col_max_f, row_bottom_f = ~base_transform * (xmax, ymin)
+
+    tol = 1e-9
+
+    col_min = int(math.floor(col_min_f + tol))
+    col_max = int(math.ceil(col_max_f - tol))
+    row_top = int(math.floor(row_top_f + tol))
+    row_bottom = int(math.ceil(row_bottom_f - tol))
+
+    width = col_max - col_min
+    height = row_bottom - row_top
+
+    if width <= 0 or height <= 0:
+        raise ValueError(
+            f"Invalid grid dimensions derived from region: width={width}, height={height}."
+        )
+
+    cropped_transform = base_transform * rasterio.Affine.translation(col_min, row_top)
+    return cropped_transform, width, height
+
+
+def _split_windows(width: int, height: int, n_cols: int, n_rows: int) -> list[dict[str, Any]]:
+    """Split a raster shape into a regular grid of raster windows."""
+    col_edges = np.linspace(0, width, n_cols + 1, dtype=int)
+    row_edges = np.linspace(0, height, n_rows + 1, dtype=int)
+
+    windows: list[dict[str, Any]] = []
+    idx = 0
+
+    for row_idx in range(n_rows):
+        for col_idx in range(n_cols):
+            col0 = int(col_edges[col_idx])
+            col1 = int(col_edges[col_idx + 1])
+            row0 = int(row_edges[row_idx])
+            row1 = int(row_edges[row_idx + 1])
+
+            windows.append(
+                {
+                    "index": idx,
+                    "row_idx": row_idx,
+                    "col_idx": col_idx,
+                    "window": Window(
+                        col_off=col0,
+                        row_off=row0,
+                        width=col1 - col0,
+                        height=row1 - row0,
+                    ),
+                }
+            )
+            idx += 1
+
+    return windows
+
+
+def _window_to_region(window: Window, transform: rasterio.Affine) -> ee.Geometry:
+    """
+    Convert a raster window to an EE rectangle.
+
+    The rectangle is slightly shrunken inward to reduce the chance that
+    Earth Engine returns an extra boundary pixel. Exact final placement
+    is enforced later by cropping each downloaded tile to the expected
+    raster window.
+    """
+    left, bottom, right, top = rasterio.windows.bounds(window, transform)
+
+    px_w = abs(transform.a)
+    px_h = abs(transform.e)
+
+    eps_x = px_w * 1e-6
+    eps_y = px_h * 1e-6
+
+    return ee.Geometry.Rectangle(
+        [left + eps_x, bottom + eps_y, right - eps_x, top - eps_y],
+        proj=None,
+        geodesic=False,
+    )
+
+
+def _export_ee_tiled(
+    img: ee.Image,
+    *,
+    out_path: str,
+    grid: dict[str, Any],
+    full_transform: rasterio.Affine,
+    full_width: int,
+    full_height: int,
+    n_cols: int,
+    n_rows: int,
+    tmp_dir: str,
+    tile_prefix: str,
+    unmask_value: float | None = None,
+    quiet: bool = True,
+) -> Dict[str, Any]:
+    """
+    Export an image by tiles, normalize each tile to the expected raster
+    window, and assemble the final GeoTIFF locally.
+    """
+    os.makedirs(tmp_dir, exist_ok=True)
+    windows = _split_windows(full_width, full_height, n_cols=n_cols, n_rows=n_rows)
+
+    assembled: np.ndarray | None = None
+    profile: dict[str, Any] | None = None
+    covered = np.zeros((full_height, full_width), dtype=bool)
+    tile_paths: list[str] = []
+
+    for tile in windows:
+        idx = tile["index"]
+        window = tile["window"]
+
+        exp_h = int(window.height)
+        exp_w = int(window.width)
+
+        tile_grid = {
+            "projection_info": grid["projection_info"],
+            "region_used": _window_to_region(window, full_transform),
+            "scale_m": grid.get("scale_m", None),
+        }
+
+        tile_path = os.path.join(tmp_dir, f"{tile_prefix}_{idx}.tif")
+
+        _ee_to_tif_standard(
+            img=img,
+            out_path=tile_path,
+            grid=tile_grid,
+            unmask_value=unmask_value,
+            quiet=quiet,
+        )
+
+        with rasterio.open(tile_path) as src:
+            arr = src.read(1)
+            if profile is None:
+                profile = src.profile.copy()
+
+        # Earth Engine may return one extra boundary row or column.
+        # Crop to the expected raster window before assembly.
+        arr = arr[:exp_h, :exp_w]
+
+        if arr.shape != (exp_h, exp_w):
+            raise ValueError(
+                f"Tile {idx} could not be normalized to expected shape "
+                f"{(exp_h, exp_w)}. Actual cropped shape: {arr.shape}."
+            )
+
+        if assembled is None:
+            assembled = np.empty((full_height, full_width), dtype=arr.dtype)
+
+        row0 = int(window.row_off)
+        row1 = row0 + exp_h
+        col0 = int(window.col_off)
+        col1 = col0 + exp_w
+
+        assembled[row0:row1, col0:col1] = arr
+        covered[row0:row1, col0:col1] = True
+        tile_paths.append(tile_path)
+
+    if assembled is None or profile is None:
+        raise RuntimeError("Tiled export failed before any tile was assembled.")
+    if not np.all(covered):
+        raise RuntimeError("Tiled export did not cover the full output raster.")
+
+    out_dir = os.path.dirname(out_path)
+    if out_dir:
+        os.makedirs(out_dir, exist_ok=True)
+
+    profile.update(
+        {
+            "height": full_height,
+            "width": full_width,
+            "transform": full_transform,
+            "count": 1,
+        }
+    )
+
+    with rasterio.open(out_path, "w", **profile) as dst:
+        dst.write(assembled, 1)
+
+    return {
+        "out_path": out_path,
+        "tile_paths": tile_paths,
+        "n_cols": n_cols,
+        "n_rows": n_rows,
+    }
