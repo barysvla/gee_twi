@@ -62,7 +62,7 @@ The workflow consists of several sequential steps executed in the Colab notebook
    A global DEM dataset is selected from the available sources (e.g., FABDEM, Copernicus GLO-30, MERIT DEM, SRTM).
 
 4. **Hydrological conditioning of DEM**  
-   Depressions are filled using **Priority-Flood (Barnes et al., 2014)** and flats are resolved using the method of **Barnes et al. (2015)**.
+   Depressions are filled using **Priority-Flood (Barnes et al., 2014a)** and flats are resolved using the method of **Barnes et al. (2014b)**.
    
 5. **Flow routing and accumulation computation**  
    Flow routing is computed using either the **D8 (single-flow direction)** algorithm or the **multiple-flow direction (MFD)** method proposed by Quinn et al. (1991). The resulting flow distribution is then used to compute the upslope contributing area.
@@ -108,8 +108,12 @@ This hybrid approach is used because some hydrological algorithms rely on iterat
 
 ## References
 
-Barnes, R., Lehman, C., & Mulla, D. (2014). Priority-Flood: An optimal depression-filling and watershed-labeling algorithm for digital elevation models. *Computers & Geosciences*.
+Barnes, R., Lehman, C., & Mulla, D. (2014a). Priority-Flood: An optimal depression-filling and watershed-labeling algorithm for digital elevation models. *Computers & Geosciences*, 62, 117–127.
 
-Barnes, R., Lehman, C., & Mulla, D. (2015). An efficient assignment of drainage direction over flat surfaces in raster digital elevation models. *Computers & Geosciences*.
+Barnes, R., Lehman, C., & Mulla, D. (2014b). An efficient assignment of drainage direction over flat surfaces in raster digital elevation models. *Computers & Geosciences*, 62, 128–135.
+
+Barták, V. (2008). Algoritmy pro zpracování digitálních modelů terénu s aplikacemi v hydrologickém modelování. Diplomová práce, Česká zemědělská univerzita v Praze.
+
+O'Callaghan, J. F., & Mark, D. M. (1984). The extraction of drainage networks from digital elevation data. *Computer Vision, Graphics, and Image Processing*, 28(3), 323–344.
 
 Quinn, P., Beven, K., Chevallier, P., & Planchon, O. (1991). The prediction of hillslope flow paths for distributed hydrological modelling using digital terrain models. *Hydrological Processes*, 5(1), 59–79.
