@@ -11,6 +11,14 @@ such as slope, flow accumulation, and TWI.
 
 Open the notebook in Google Colab using the badge above, save a copy to your Google Drive, and follow the step-by-step instructions provided directly in the notebook.
 
+## Processing architecture
+
+The workflow combines server-side processing in Google Earth Engine with local computation in the Colab environment.
+
+DEM conditioning, flow routing, and flow accumulation are performed locally using NumPy, while terrain slope is derived in Earth Engine.
+
+The workflow branches into cloud or local execution only at the TWI computation stage.
+
 ## Project structure
 
 - `main.py`  
