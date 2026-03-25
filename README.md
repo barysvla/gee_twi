@@ -43,9 +43,9 @@ The workflow branches into cloud or local execution only at the TWI computation 
 - Enabled APIs:
   - Google Earth Engine API
   - Cloud Billing API
-- Billing account (required for cloud execution mode)
+- Billing account (required for server-side TWI computation in GEE)
 
-Local mode runs without billing.
+Local execution does not require billing.
 
 ## Workflow overview
 
@@ -89,14 +89,12 @@ The workflow consists of several sequential steps executed in the Colab notebook
 
 ## Execution model
 
-The workflow combines **server-side processing in GEE** with **local computation in the Colab environment**.
-
 The division of computation is as follows:
 
 **Operations executed in Google Earth Engine**
 - loading the selected DEM dataset
 - slope computation using `ee.Terrain.slope`
-- optional cloud-based visualization
+- visualization in Earth Engine (interactive map)
 - TWI computation in cloud mode
 
 **Operations executed locally in Colab (NumPy)**
