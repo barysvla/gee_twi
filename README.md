@@ -11,6 +11,23 @@ such as slope, flow accumulation, and TWI.
 
 Open the notebook in Google Colab using the badge above, save a copy to your Google Drive, and follow the step-by-step instructions provided directly in the notebook.
 
+## Project structure
+
+- `main.py`  
+  Main entry point coordinating the workflow.
+
+- `scripts/`  
+  Core processing modules:  
+  - `fill_depressions.py`, `resolve_flats.py` – DEM conditioning  
+  - `flow_direction_d8.py`, `flow_direction_mfd.py` – flow routing  
+  - `flow_accumulation.py` – contributing area computation  
+  - `twi.py` – TWI calculation  
+  - `grid_io.py`, `geotiff_io.py`, `numpy_to_ee.py` – data transfer and export  
+  - `visualization.py` – visualization utilities  
+
+- `notebooks/gee_twi_workflow.ipynb`  
+  Interactive Colab notebook for running the workflow.
+
 ## Requirements
 
 - Google Earth Engine account
