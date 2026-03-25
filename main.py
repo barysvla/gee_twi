@@ -95,7 +95,12 @@ def _compute_flow(
     px_area_np,
     flow_method: str,
 ) -> dict[str, Any]:
-    """Compute flow direction and accumulation products for the selected routing method."""
+    """
+    Compute flow direction and flow accumulation for the selected routing method.
+
+    Depending on the selected option, the function runs either D8 or MFD
+    flow routing and then derives flow accumulation in square kilometres.
+    """
     if flow_method == "mfd_quinn_1991":
         dir_out = flow_dir_mfd_quinn_1991(
             dem_np,
@@ -110,17 +115,11 @@ def _compute_flow(
             pixel_area_m2=px_area_np,
             out="km2",
         )
-        acc_cells = flow_acc(
-            flow_weights=dir_out,
-            nodata_mask=nodata_mask,
-            out="cells",
-        )
         print("Flow accumulation computed.")
 
         return {
             "dir": dir_out,
             "acc_km2": acc_km2,
-            "acc_cells": acc_cells,
         }
 
     if flow_method == "d8":
@@ -137,17 +136,11 @@ def _compute_flow(
             pixel_area_m2=px_area_np,
             out="km2",
         )
-        acc_cells = flow_acc(
-            dir_idx=dir_out,
-            nodata_mask=nodata_mask,
-            out="cells",
-        )
         print("Flow accumulation computed.")
 
         return {
             "dir": dir_out,
             "acc_km2": acc_km2,
-            "acc_cells": acc_cells,
         }
 
     raise ValueError(f"Unsupported flow_method: {flow_method}")
@@ -159,7 +152,6 @@ def _build_cloud_map(
     scale: ee.Number,
     slope_ee: ee.Image,
     acc_km2_ee: ee.Image,
-    acc_cells_ee: ee.Image,
     merit_upa: ee.Image,
     cti: ee.Image,
     twi: ee.Image,
@@ -189,14 +181,6 @@ def _build_cloud_map(
         k=2.0,
         palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"],
     )
-    vis_acc_cells = vis_sigma(
-        acc_cells_ee,
-        "flow_accumulation_cells",
-        geom,
-        scale,
-        k=2.0,
-        palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"],
-    )
     vis_merit = vis_sigma(
         merit_upa,
         "MERIT_flow_accumulation_upa",
@@ -212,14 +196,14 @@ def _build_cloud_map(
         scale,
         k=2.0,
         palette=[
-            "#f7fbff", "#deebf7", "#c6dbef", "#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#084594",
+            "#f7fbff", "#deebf7", "#c6dbef", "#9ecae1",
+            "#6baed6", "#4292c6", "#2171b5", "#084594",
         ],
     )
 
     map_obj = show_map(
         [
             (slope_ee, vis_slope, "Slope (°)"),
-            (acc_cells_ee, vis_acc_cells, "Flow accumulation (cells)"),
             (merit_upa, vis_merit, "(reference) Flow accumulation - MERIT (km²)"),
             (acc_km2_ee, vis_acc_km2, "Flow accumulation (km²)"),
             (cti, vis_cti, "(reference) CTI - Hydrography90m"),
@@ -244,10 +228,16 @@ def _run_cloud(
     slope_ee: ee.Image,
     scale: ee.Number,
     acc_km2,
-    acc_cells,
     ref_layers: dict[str, ee.Image],
 ) -> dict[str, Any]:
-    """Run the cloud-mode branch and return Earth Engine outputs."""
+    """
+    Run the cloud output branch of the workflow.
+
+    This function uploads the locally computed flow-accumulation raster back to
+    Earth Engine, computes TWI in cloud mode, and prepares interactive map
+    layers for visualization. It returns a dictionary containing the final
+    Earth Engine outputs and the map object.
+    """
     acc_km2_res = np_to_ee(
         acc_km2,
         transform=transform,
@@ -263,21 +253,6 @@ def _run_cloud(
     acc_km2_ee_full = acc_km2_res["image"]
     acc_km2_ee = acc_km2_ee_full.clip(geom)
 
-    acc_cells_res = np_to_ee(
-        acc_cells,
-        transform=transform,
-        crs=crs,
-        nodata_mask=nodata_mask,
-        bucket_name=f"{project_id}-ee-uploads",
-        project_id=project_id,
-        band_name="flow_accumulation_cells",
-        tmp_dir=grid.get("tmp_dir", None),
-        object_prefix="twi_uploads",
-        nodata_value=-9999.0,
-    )
-    acc_cells_ee_full = acc_cells_res["image"]
-    acc_cells_ee = acc_cells_ee_full.clip(geom)
-
     twi = twi_ee(acc_km2_ee, slope_ee).clip(geom)
     print("TWI computed.")
 
@@ -286,7 +261,6 @@ def _run_cloud(
         scale=scale,
         slope_ee=slope_ee,
         acc_km2_ee=acc_km2_ee,
-        acc_cells_ee=acc_cells_ee,
         merit_upa=ref_layers["merit_upa"],
         cti=ref_layers["cti"],
         twi=twi,
@@ -299,8 +273,6 @@ def _run_cloud(
         "flow_accumulation_km2": acc_km2_ee,
         "flow_accumulation_km2_full": acc_km2_ee_full,
         "MERIT_flow_accumulation_upa": ref_layers["merit_upa"],
-        "flow_accumulation_cells": acc_cells_ee,
-        "flow_accumulation_cells_full": acc_cells_ee_full,
         "twi": twi,
         "cti_Hydrography90m": ref_layers["cti"],
         "geometry": geom,
@@ -319,10 +291,19 @@ def _run_local(
     nodata_mask,
     slope_grid_ee: ee.Image,
     acc_km2,
-    acc_cells,
     ref_layers: dict[str, ee.Image],
 ) -> dict[str, Any]:
-    """Run the local-mode branch and return file-based outputs."""
+    """
+    Run the local output branch of the workflow.
+
+    This function exports the slope raster from Earth Engine, computes TWI
+    locally from slope and flow-accumulation arrays, and saves the main
+    outputs as GeoTIFF files. The rasters are then clipped to the target
+    geometry, reference layers are exported for comparison, and the final
+    TWI output is displayed as a local plot.
+
+    Returns a dictionary containing paths to the generated local outputs.
+    """
     slope_tif = ee_to_tif(
         slope_grid_ee,
         out_path="slope.tif",
@@ -355,14 +336,6 @@ def _run_local(
         filename="flow_accumulation_km2.tif",
         band_name="Flow accumulation (km2)",
     )
-    acc_cells_tif = save_tif(
-        acc_cells,
-        transform,
-        crs,
-        nodata_mask,
-        filename="flow_accumulation_cells.tif",
-        band_name="Flow accumulation (cells)",
-    )
     twi_tif = save_tif(
         twi_arr,
         transform,
@@ -385,12 +358,6 @@ def _run_local(
         geom_wgs84,
         "acc_km2_clipped.tif",
         band_name="Flow accumulation (km2)",
-    )
-    acc_cells_clip_tif = clip_tif(
-        acc_cells_tif,
-        geom_wgs84,
-        "acc_cells_clipped.tif",
-        band_name="Flow accumulation (cells)",
     )
     slope_clip_tif = clip_tif(
         slope_tif,
@@ -432,7 +399,6 @@ def _run_local(
         "dem": dem_clip_tif,
         "slope": slope_clip_tif,
         "flow_accumulation_km2": acc_km2_clip_tif,
-        "flow_accumulation_cells": acc_cells_clip_tif,
         "MERIT_flow_accumulation_upa": merit_upa_tif,
         "twi": twi_clip_tif,
         "cti_Hydrography90m": cti_tif,
@@ -481,7 +447,8 @@ def run_pipeline(
         Compute slope on the Earth Engine grid.
 
     Step 6
-        Run either the cloud-mode or local-mode output branch.
+        Compute the Topographic Wetness Index (TWI) and produce final outputs
+        using either the cloud-mode (Earth Engine) or local-mode (NumPy) branch.
 
     Parameters
     ----------
@@ -582,7 +549,6 @@ def run_pipeline(
         flow_method=flow_method,
     )
     acc_km2 = flow_res["acc_km2"]
-    acc_cells = flow_res["acc_cells"]
 
     # ---------------------------------------------------------------------
     # Step 5: Compute slope on the aligned Earth Engine grid
@@ -592,7 +558,7 @@ def run_pipeline(
     print("Slope computed.")
 
     # ---------------------------------------------------------------------
-    # Step 6: Run the selected output branch
+    # Step 6: Compute TWI and generate outputs (cloud or local mode)
     # ---------------------------------------------------------------------
     if use_bucket:
         return _run_cloud(
@@ -607,7 +573,6 @@ def run_pipeline(
             slope_ee=slope_ee,
             scale=scale,
             acc_km2=acc_km2,
-            acc_cells=acc_cells,
             ref_layers=ref_layers,
         )
 
@@ -619,7 +584,6 @@ def run_pipeline(
         nodata_mask=nodata_mask,
         slope_grid_ee=slope_grid_ee,
         acc_km2=acc_km2,
-        acc_cells=acc_cells,
         ref_layers=ref_layers,
     )
 
