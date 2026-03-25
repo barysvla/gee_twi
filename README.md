@@ -56,10 +56,10 @@ The workflow consists of several sequential steps executed in the Colab notebook
 4. **Hydrological conditioning of DEM**  
    Depressions are filled using **Priority-Flood (Barnes et al., 2014)** and flats are resolved using the method of **Barnes et al. (2015)**.
    
-6. **Flow routing and accumulation computation**  
+5. **Flow routing and accumulation computation**  
    Flow routing is computed using either the **D8 (single-flow direction)** algorithm or the **multiple-flow direction (MFD)** method proposed by Quinn et al. (1991). The resulting flow distribution is then used to compute the upslope contributing area.
 
-7. **Slope and TWI computation**  
+6. **Slope and TWI computation**  
    Terrain slope is calculated from the DEM and combined with flow accumulation to compute the Topographic Wetness Index:
 
       `TWI = ln(a / tan β)`
