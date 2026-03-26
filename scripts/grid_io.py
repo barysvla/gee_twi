@@ -305,11 +305,37 @@ def ee_to_tif(
     """
     Export an Earth Engine image to a grid-aligned GeoTIFF.
 
-    The function first tries a standard direct HTTP export. If the
-    request exceeds the Earth Engine response-size limit, it
-    automatically switches to tiled export, crops each downloaded tile
-    to the expected raster window, and assembles the final GeoTIFF
-    locally.
+    This function first attempts a standard direct Earth Engine export.
+    If the request exceeds the response-size limit, it automatically
+    switches to tiled export, normalizes each downloaded tile to the
+    expected raster window, and assembles the final GeoTIFF locally.
+
+    The procedure consists of the following steps:
+
+    Step 0
+        Validate the export mode and input options.
+
+    Step 1
+        Attempt a standard direct export.
+
+    Step 2
+        If the direct export exceeds the size limit, derive the full
+        raster transform and shape from the grid definition.
+
+    Step 3
+        Estimate a suitable tile grid from raster dimensions and a
+        conservative per-tile byte budget.
+
+    Step 4
+        Export the image by tiles and assemble the final GeoTIFF.
+
+    Step 5
+        If tiled export fails, refine the tile grid and retry until the
+        maximum number of attempts is reached.
+
+    Step 6
+        Build the final export diagnostics or raise an error if all
+        export attempts fail.
 
     Parameters
     ----------
@@ -318,16 +344,11 @@ def ee_to_tif(
     out_path : str
         Target GeoTIFF path.
     grid : dict
-        Grid definition with:
-            - "projection_info": {"crs": str, "transform": list | None}
-            - "region_used": ee.Geometry
-        and optionally:
-            - "scale_m": float
+        Grid definition with projection metadata and export region.
     unmask_value : float, optional
-        Value passed to `img.unmask(unmask_value)` before export.
+        Value used in `img.unmask(unmask_value)` before export.
     quiet : bool, default=True
-        If True, suppress verbose logging from geemap and Google client
-        libraries during export.
+        If True, suppress verbose logging during export.
     force_tiled : bool, default=False
         If True, skip direct export and use tiled export immediately.
         Intended mainly for testing.
@@ -339,24 +360,26 @@ def ee_to_tif(
     tile_prefix : str, default="tile"
         Prefix used for temporary tile filenames.
     remove_tile_dirs : bool, default=False
-        If True, delete temporary tiled-export directories after success.
+        If True, remove temporary tiled-export directories after a
+        successful tiled export.
 
     Returns
     -------
     result : dict
-        Export diagnostics with at least:
-            - "mode": "standard" or "tiled"
-            - "out_path": final GeoTIFF path
-            - "n_cols", "n_rows": tile grid size
-            - "attempt": successful tiled-export attempt index or 0
-            - "standard_error": direct-export error text or None
-            - "attempt_history": tiled retry history
+        Dictionary describing the export mode, output path, tile-grid
+        configuration, and export diagnostics.
     """
+    # ---------------------------------------------------------------------
+    # Step 0: Validate export mode and input options
+    # ---------------------------------------------------------------------
     if force_tiled and force_standard:
         raise ValueError("force_tiled and force_standard cannot both be True.")
 
     standard_error: Exception | None = None
 
+    # ---------------------------------------------------------------------
+    # Step 1: Attempt a standard direct export
+    # ---------------------------------------------------------------------
     if not force_tiled:
         try:
             _ee_to_tif_standard(
@@ -382,8 +405,14 @@ def ee_to_tif(
             if not isinstance(exc, EarthEngineSizeLimitError):
                 raise
 
+    # ---------------------------------------------------------------------
+    # Step 2: Derive full raster transform and shape from the grid
+    # ---------------------------------------------------------------------
     full_transform, full_width, full_height = _grid_transform_and_shape(grid)
 
+    # ---------------------------------------------------------------------
+    # Step 3: Estimate an initial tile grid
+    # ---------------------------------------------------------------------
     plan = _suggest_tile_grid(
         width=full_width,
         height=full_height,
@@ -404,6 +433,9 @@ def ee_to_tif(
 
     attempt_history: list[dict[str, Any]] = []
 
+    # ---------------------------------------------------------------------
+    # Step 4-5: Export by tiles, assemble, and retry if needed
+    # ---------------------------------------------------------------------
     for attempt in range(1, _TILE_MAX_RETRIES + 1):
         attempt_dir = os.path.join(tmp_dir, f"attempt_{attempt}_{n_rows}x{n_cols}")
         os.makedirs(attempt_dir, exist_ok=True)
@@ -464,7 +496,11 @@ def ee_to_tif(
             )
             n_cols, n_rows = _refine_tile_grid(n_cols, n_rows, mode=_TILE_REFINE_MODE)
 
+    # ---------------------------------------------------------------------
+    # Step 6: Raise a final error if all export attempts failed
+    # ---------------------------------------------------------------------
     error_lines = ["Automatic EE export failed.", ""]
+
     if standard_error is not None:
         error_lines.extend(["Standard export error:", repr(standard_error), ""])
     else:
