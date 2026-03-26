@@ -1,372 +1,579 @@
-# main.py
+from __future__ import annotations
+
+from typing import Any
+from datetime import datetime
+import time
+import os
+
 import ee
-import geemap
 import numpy as np
 
-from scripts.io_grid import export_dem_and_area_to_arrays
-from scripts.ee_io import push_array_to_ee_geotiff
-from scripts.raster_io import save_array_as_geotiff, clip_tif_by_geojson
-from scripts.ee_export import export_ee_image_to_geotiff, read_geotiff_to_numpy
-
-from scripts.fill_depressions import priority_flood_fill
+from scripts.fill_depressions import fill_depressions
+from scripts.flow_accumulation import flow_acc
+from scripts.flow_direction_d8 import flow_dir_d8
+from scripts.flow_direction_mfd import flow_dir_mfd_quinn_1991
+from scripts.geotiff_io import clip_tif, read_tif, save_tif
+from scripts.grid_io import export_dem_grid, ee_to_tif
+from scripts.numpy_to_ee import np_to_ee
 from scripts.resolve_flats import resolve_flats_barnes_2014
+from scripts.twi import twi_ee, twi_np
+from scripts.visualization import plot_raster, show_map, vis_sigma
 
-from scripts.flow_direction_mfd_quinn_1991 import compute_flow_direction_mfd_quinn_1991
-from scripts.flow_direction_d8 import compute_flow_direction_d8
 
-from scripts.flow_accumulation import compute_flow_accumulation
+def _select_dem_src(
+    dem_source: str,
+) -> ee.Image | ee.ImageCollection:
+    if dem_source == "FABDEM":
+        return ee.ImageCollection("projects/sat-io/open-datasets/FABDEM")
+    if dem_source == "GLO30":
+        return ee.ImageCollection("COPERNICUS/DEM/GLO30").select("DEM")
+    if dem_source == "AW3D30":
+        return ee.ImageCollection("JAXA/ALOS/AW3D30/V4_1").select("DSM")
+    if dem_source == "SRTMGL1_003":
+        return ee.Image("USGS/SRTMGL1_003").select("elevation")
+    if dem_source == "NASADEM_HGT":
+        return ee.Image("NASA/NASADEM_HGT/001").select("elevation")
+    if dem_source == "ASTER_GDEM":
+        return ee.Image("projects/sat-io/open-datasets/ASTER/GDEM").select("b1")
+    if dem_source == "CGIAR_SRTM90":
+        return ee.Image("CGIAR/SRTM90_V4").select("elevation")
+    if dem_source == "MERIT_DEM":
+        return ee.Image("MERIT/DEM/v1_0_3").select("dem")
+    if dem_source == "MERIT_Hydro":
+        return ee.Image("MERIT/Hydro/v1_0_1").select("elv")
+    raise ValueError(f"Unsupported dem_source: {dem_source}")
 
-from scripts.twi import compute_twi, compute_twi_numpy
-from scripts.visualization import visualize_map, vis_2sigma, plot_tif
 
-from google.colab import files
+def _build_ref_layers(
+    dem_ee: ee.Image,
+    geom: ee.Geometry,
+    scale: ee.Number,
+) -> dict[str, ee.Image]:
+    merit_upa_grid = (
+        ee.Image("MERIT/Hydro/v1_0_1")
+        .select("upa")
+        .reproject(dem_ee.projection())
+        .rename("MERIT_flow_accumulation_upa")
+    )
+    merit_upa = merit_upa_grid.clip(geom)
+
+    cti_grid = (
+        ee.ImageCollection("projects/sat-io/open-datasets/HYDROGRAPHY90/flow_index/cti")
+        .mosaic()
+        .toFloat()
+        .divide(ee.Number(1e8))
+        .translate(0, scale.multiply(-1))
+        .reproject(dem_ee.projection())
+        .rename("CTI")
+    )
+    cti = cti_grid.clip(geom)
+
+    return {
+        "merit_upa_grid": merit_upa_grid,
+        "merit_upa": merit_upa,
+        "cti_grid": cti_grid,
+        "cti": cti,
+    }
+
+
+def _compute_flow(
+    dem_np,
+    transform,
+    nodata_mask,
+    px_area_np,
+    flow_method: str,
+) -> dict[str, Any]:
+    timings = {}
+
+    if flow_method == "mfd_quinn_1991":
+        t0 = time.perf_counter()
+        dir_out = flow_dir_mfd_quinn_1991(
+            dem_np,
+            transform,
+            nodata_mask=nodata_mask,
+        )
+        dt_dir = time.perf_counter() - t0
+        timings["flow_direction_s"] = dt_dir
+        print(f"Flow direction computed. ({dt_dir:.2f} s)")
+
+        t0 = time.perf_counter()
+        acc_km2 = flow_acc(
+            flow_weights=dir_out,
+            nodata_mask=nodata_mask,
+            pixel_area_m2=px_area_np,
+            out="km2",
+        )
+        dt_acc = time.perf_counter() - t0
+        timings["flow_accumulation_s"] = dt_acc
+        print(f"Flow accumulation computed. ({dt_acc:.2f} s)")
+
+        return {
+            "dir": dir_out,
+            "acc_km2": acc_km2,
+            "timings": timings,
+        }
+
+    if flow_method == "d8":
+        t0 = time.perf_counter()
+        dir_out = flow_dir_d8(
+            dem_np,
+            transform,
+            nodata_mask=nodata_mask,
+        )
+        dt_dir = time.perf_counter() - t0
+        timings["flow_direction_s"] = dt_dir
+        print(f"Flow direction computed. ({dt_dir:.2f} s)")
+
+        t0 = time.perf_counter()
+        acc_km2 = flow_acc(
+            dir_idx=dir_out,
+            nodata_mask=nodata_mask,
+            pixel_area_m2=px_area_np,
+            out="km2",
+        )
+        dt_acc = time.perf_counter() - t0
+        timings["flow_accumulation_s"] = dt_acc
+        print(f"Flow accumulation computed. ({dt_acc:.2f} s)")
+
+        return {
+            "dir": dir_out,
+            "acc_km2": acc_km2,
+            "timings": timings,
+        }
+
+    raise ValueError(f"Unsupported flow_method: {flow_method}")
+
+
+def _build_cloud_map(
+    *,
+    geom: ee.Geometry,
+    scale: ee.Number,
+    slope_ee: ee.Image,
+    acc_km2_ee: ee.Image,
+    merit_upa: ee.Image,
+    cti: ee.Image,
+    twi: ee.Image,
+):
+    vis_twi = vis_sigma(
+        twi,
+        "TWI",
+        geom,
+        scale,
+        k=2.0,
+        palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"],
+    )
+    vis_cti = vis_sigma(
+        cti,
+        "CTI",
+        geom,
+        scale,
+        k=2.0,
+        palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"],
+    )
+    vis_acc_km2 = vis_sigma(
+        acc_km2_ee,
+        "flow_accumulation_km2",
+        geom,
+        scale,
+        k=2.0,
+        palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"],
+    )
+    vis_merit = vis_sigma(
+        merit_upa,
+        "MERIT_flow_accumulation_upa",
+        geom,
+        scale,
+        k=2.0,
+        palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"],
+    )
+    vis_slope = vis_sigma(
+        slope_ee,
+        "Slope",
+        geom,
+        scale,
+        k=2.0,
+        palette=[
+            "#f7fbff", "#deebf7", "#c6dbef", "#9ecae1",
+            "#6baed6", "#4292c6", "#2171b5", "#084594",
+        ],
+    )
+
+    map_obj = show_map(
+        [
+            (slope_ee, vis_slope, "Slope (°)"),
+            (merit_upa, vis_merit, "(reference) Flow accumulation - MERIT (km²)"),
+            (acc_km2_ee, vis_acc_km2, "Flow accumulation (km²)"),
+            (cti, vis_cti, "(reference) CTI - Hydrography90m"),
+            (twi, vis_twi, "TWI"),
+        ]
+    )
+    map_obj.centerObject(geom, 12)
+
+    return map_obj
+
+
+def _run_cloud(
+    *,
+    project_id: str,
+    geom: ee.Geometry,
+    geom_acc: ee.Geometry,
+    grid: dict[str, Any],
+    transform,
+    crs,
+    nodata_mask,
+    dem_ee: ee.Image,
+    slope_ee: ee.Image,
+    scale: ee.Number,
+    acc_km2,
+    ref_layers: dict[str, ee.Image],
+    cell_count_total,
+    cell_count_valid,
+    cell_count_nodata,
+    timings,
+) -> dict[str, Any]:
+    acc_km2_res = np_to_ee(
+        acc_km2,
+        transform=transform,
+        crs=crs,
+        nodata_mask=nodata_mask,
+        bucket_name=f"{project_id}-ee-uploads",
+        project_id=project_id,
+        band_name="flow_accumulation_km2",
+        tmp_dir=grid.get("tmp_dir", None),
+        object_prefix="twi_uploads",
+        nodata_value=-9999.0,
+    )
+    acc_km2_ee_full = acc_km2_res["image"]
+    acc_km2_ee = acc_km2_ee_full.clip(geom)
+
+    t0 = time.perf_counter()
+    twi = twi_ee(acc_km2_ee, slope_ee).clip(geom)
+    dt = time.perf_counter() - t0
+    timings["twi_s"] = dt
+    print(f"TWI computed. ({dt:.2f} s)")
+
+    map_obj = _build_cloud_map(
+        geom=geom,
+        scale=scale,
+        slope_ee=slope_ee,
+        acc_km2_ee=acc_km2_ee,
+        merit_upa=ref_layers["merit_upa"],
+        cti=ref_layers["cti"],
+        twi=twi,
+    )
+
+    return {
+        "dem": dem_ee.clip(geom),
+        "mode": "cloud",
+        "slope": slope_ee,
+        "flow_accumulation_km2": acc_km2_ee,
+        "flow_accumulation_km2_full": acc_km2_ee_full,
+        "MERIT_flow_accumulation_upa": ref_layers["merit_upa"],
+        "twi": twi,
+        "cti_Hydrography90m": ref_layers["cti"],
+        "geometry": geom,
+        "geometry_accum": geom_acc,
+        "scale": scale,
+        "map": map_obj,
+        "cell_count_total": cell_count_total,
+        "cell_count_valid": cell_count_valid,
+        "cell_count_nodata": cell_count_nodata,
+        "timings": timings,
+    }
+
+
+def _run_local(
+    *,
+    geom: ee.Geometry,
+    grid: dict[str, Any],
+    output_dir: str,
+    transform,
+    crs,
+    nodata_mask,
+    slope_grid_ee: ee.Image,
+    acc_km2,
+    ref_layers: dict[str, ee.Image],
+    cell_count_total,
+    cell_count_valid,
+    cell_count_nodata,
+    timings,
+) -> dict[str, Any]:
+    out_dir = output_dir
+    os.makedirs(out_dir, exist_ok=True)
+
+    tiles_dir = os.path.join(out_dir, "tiles")
+    os.makedirs(tiles_dir, exist_ok=True)
+
+    slope_tif_path = os.path.join(out_dir, "slope.tif")
+    acc_km2_tif_path = os.path.join(out_dir, "flow_accumulation_km2.tif")
+    twi_tif_path = os.path.join(out_dir, "twi.tif")
+
+    dem_clip_tif_path = os.path.join(out_dir, "dem_clipped.tif")
+    acc_km2_clip_tif_path = os.path.join(out_dir, "acc_km2_clipped.tif")
+    slope_clip_tif_path = os.path.join(out_dir, "slope_clipped.tif")
+    twi_clip_tif_path = os.path.join(out_dir, "twi_clipped.tif")
+
+    merit_upa_tif_path = os.path.join(out_dir, "merit_upa.tif")
+    cti_tif_path = os.path.join(out_dir, "cti.tif")
+
+    slope_export = ee_to_tif(
+        slope_grid_ee,
+        out_path=slope_tif_path,
+        grid=grid,
+        unmask_value=None,
+        quiet=True,
+        tmp_dir=os.path.join(tiles_dir, "slope"),
+        tile_prefix="slope_tile",
+    )
+    slope_tif = slope_export["out_path"]
+
+    slope_np = read_tif(
+        slope_tif,
+        nodata_mask=grid["nodata_mask"],
+    )
+
+    t0 = time.perf_counter()
+    twi_arr = twi_np(
+        acc_np=acc_km2,
+        slope_deg_np=slope_np,
+        min_slope_deg=0.1,
+        nodata_mask=nodata_mask,
+        out_dtype="float32",
+    )
+    dt = time.perf_counter() - t0
+    timings["twi_s"] = dt
+    print(f"TWI computed. ({dt:.2f} s)")
+
+    dem_tif = grid["paths"]["dem_elevations"]
+
+    acc_km2_tif = save_tif(
+        acc_km2,
+        transform,
+        crs,
+        nodata_mask,
+        filename=acc_km2_tif_path,
+        band_name="Flow accumulation (km2)",
+    )
+    twi_tif = save_tif(
+        twi_arr,
+        transform,
+        crs,
+        nodata_mask,
+        filename=twi_tif_path,
+        band_name="TWI",
+    )
+
+    geom_wgs84 = geom.getInfo()
+
+    dem_clip_tif = clip_tif(
+        dem_tif,
+        geom_wgs84,
+        dem_clip_tif_path,
+        band_name="DEM",
+    )
+    acc_km2_clip_tif = clip_tif(
+        acc_km2_tif,
+        geom_wgs84,
+        acc_km2_clip_tif_path,
+        band_name="Flow accumulation (km2)",
+    )
+    slope_clip_tif = clip_tif(
+        slope_tif,
+        geom_wgs84,
+        slope_clip_tif_path,
+        band_name="Slope",
+    )
+    twi_clip_tif = clip_tif(
+        twi_tif,
+        geom_wgs84,
+        twi_clip_tif_path,
+        band_name="TWI",
+    )
+
+    merit_upa_export = ee_to_tif(
+        img=ref_layers["merit_upa_grid"],
+        out_path=merit_upa_tif_path,
+        grid=grid,
+        quiet=True,
+        tmp_dir=os.path.join(tiles_dir, "merit"),
+        tile_prefix="merit_tile",
+    )
+    merit_upa_tif = merit_upa_export["out_path"]
+
+    cti_export = ee_to_tif(
+        img=ref_layers["cti_grid"],
+        out_path=cti_tif_path,
+        grid=grid,
+        quiet=True,
+        tmp_dir=os.path.join(tiles_dir, "cti"),
+        tile_prefix="cti_tile",
+    )
+    cti_tif = cti_export["out_path"]
+
+    print("Plotting TWI (local mode, percentile stretch).")
+    plot_raster(
+        twi_clip_tif,
+        p_low=2.0,
+        p_high=98.0,
+        label="TWI",
+        title="Topographic Wetness Index",
+    )
+
+    return {
+        "mode": "local",
+        "output_dir": out_dir,
+        "dem": dem_clip_tif,
+        "slope": slope_clip_tif,
+        "flow_accumulation_km2": acc_km2_clip_tif,
+        "MERIT_flow_accumulation_upa": merit_upa_tif,
+        "twi": twi_clip_tif,
+        "cti_Hydrography90m": cti_tif,
+        "transform": transform,
+        "crs": crs,
+        "nodata_mask": nodata_mask,
+        "export_info": {
+            "slope": slope_export,
+            "MERIT_flow_accumulation_upa": merit_upa_export,
+            "cti_Hydrography90m": cti_export,
+        },
+        "cell_count_total": cell_count_total,
+        "cell_count_valid": cell_count_valid,
+        "cell_count_nodata": cell_count_nodata,
+        "timings": timings,
+    }
+
 
 def run_pipeline(
-    project_id: str = None,
-    geometry: ee.Geometry = None,                # ORIGINAL, UNBUFFERED ROI (for clipping)
-    accum_geometry: ee.Geometry = None,          # BUFFERED ROI FOR ACCUMULATION (optional; falls back to geometry)
+    project_id: str | None = None,
+    geometry: ee.Geometry | None = None,
+    accum_geometry: ee.Geometry | None = None,
     dem_source: str = "FABDEM",
     flow_method: str = "mfd_quinn_1991",
     use_bucket: bool = False,
-) -> dict:
-    """
-    Compute DEM conditioning, flow direction/accumulation, slope (on buffered ROI) and TWI (on unbuffered ROI).
-    Returns:
-        dict with:
-            - ee_flow_accumulation        (ee.Image)  # clipped to unbuffered ROI
-            - ee_flow_accumulation_full   (ee.Image)  # full accumulation over buffered ROI
-            - geometry                    (ee.Geometry)        # unbuffered ROI
-            - geometry_accum              (ee.Geometry)        # buffered ROI actually used for accumulation
-            - scale                       (ee.Number)
-            - slope                       (ee.Image)          # clipped to unbuffered ROI
-            - twi                         (ee.Image)          # clipped to unbuffered ROI
-            - map                         (geemap.Map)
-    """
-    # --- Initialize Earth Engine ---
+    output_dir: str | None = None,
+) -> dict[str, Any]:
     ee.Initialize(project=project_id)
 
-    # --- Regions of interest ---
     if geometry is None:
-    # Fail fast: the caller must pass a valid ee.Geometry; do not fall back to defaults
         raise ValueError("Missing required parameter: geometry")
 
-    # Use the same ROI for accumulation if no separate (buffered) geometry was provided
-    if accum_geometry is None:
-        accum_geometry = geometry  # default: no buffer
+    geom = geometry
+    geom_acc = accum_geometry if accum_geometry is not None else geom
 
-    # --- DEM source selection ---
-    if dem_source == "FABDEM":
-        dem_raw = ee.ImageCollection("projects/sat-io/open-datasets/FABDEM")
-    elif dem_source == "GLO30":
-        dem_raw = ee.ImageCollection("COPERNICUS/DEM/GLO30").select("DEM")
-    elif dem_source == "AW3D30":
-        dem_raw = ee.ImageCollection("JAXA/ALOS/AW3D30/V4_1").select("DSM")
-    elif dem_source == "SRTMGL1_003":
-        dem_raw = ee.Image("USGS/SRTMGL1_003").select("elevation")
-    elif dem_source == "NASADEM_HGT":
-        dem_raw = ee.Image("NASA/NASADEM_HGT/001").select("elevation")
-    elif dem_source == "ASTER_GDEM":
-        dem_raw = ee.Image("projects/sat-io/open-datasets/ASTER/GDEM").select("b1")
-    elif dem_source == "CGIAR_SRTM90":
-        dem_raw = ee.Image("CGIAR/SRTM90_V4").select("elevation")
-    elif dem_source == "MERIT_DEM":
-        dem_raw = ee.Image("MERIT/DEM/v1_0_3").select("dem")
-    elif dem_source == "MERIT_Hydro":
-        dem_raw = ee.Image("MERIT/Hydro/v1_0_1").select("elv")
-    else:
-        raise ValueError(f"Unsupported dem_source: {dem_source}")
+    if output_dir is None:
+        run_name = datetime.now().strftime("run_%Y%m%d_%H%M%S")
+        output_dir = os.path.join("outputs", run_name)
 
-    # --- Export DEM to numpy grid over the ACCUMULATION geometry (buffered) ---
-    grid = export_dem_and_area_to_arrays(
-        src=dem_raw,
-        region_geom=accum_geometry,      # compute grids over buffered extent to reduce boundary effects
+    os.makedirs(output_dir, exist_ok=True)
+
+    timings = {}
+
+    dem_src = _select_dem_src(dem_source)
+
+    grid = export_dem_grid(
+        src=dem_src,
+        region_geom=geom_acc,
         band=None,
         resample_method="bilinear",
         nodata_value=-9999.0,
         snap_region_to_grid=True,
     )
 
-    dem_elevations_np = grid["dem_elevations_np"]        # DEM in numpy
-    pixel_area_m2_np  = grid["pixel_area_m2_np"]         # pixel area (numpy)
-    transform         = grid["transform"]
-    nodata_mask       = grid["nodata_mask"]
-    crs               = grid["crs"]
-    ee_dem_grid       = grid["ee_dem_grid"]           # DEM (Earth Engine grid-locked)
+    dem_np = grid["dem_elevations_np"]
+    px_area_np = grid["pixel_area_m2_np"]
+    transform = grid["transform"]
+    nodata_mask = grid["nodata_mask"]
+    crs = grid["crs"]
+    dem_ee = grid["ee_dem_grid"]
+    scale = ee.Number(dem_ee.projection().nominalScale())
 
-    scale = ee.Number(ee_dem_grid.projection().nominalScale())
-    # print("nominalScale [m]:", scale.getInfo())
+    cell_count_total = int(dem_np.size)
+    cell_count_valid = int((~nodata_mask).sum())
+    cell_count_nodata = int(nodata_mask.sum())
 
-    # --- Hydrologic conditioning (client-side arrays) ---
-    dem_filled = priority_flood_fill(
-        dem_elevations_np,
+    ref_layers = _build_ref_layers(
+        dem_ee=dem_ee,
+        geom=geom,
+        scale=scale,
+    )
+
+    t0 = time.perf_counter()
+    dem_fill_np = fill_depressions(
+        dem_np,
         seed_internal_nodata_as_outlet=True,
         return_fill_depth=False,
     )
-    print("✅ Fill depressions completed.")
+    dt = time.perf_counter() - t0
+    timings["depression_filling_s"] = dt
+    print(f"Depression filling completed. ({dt:.2f} s)")
 
-    dem_resolved, flatmask, labels, flowdirs, stats = resolve_flats_barnes_2014(
-        dem_filled,
+    t0 = time.perf_counter()
+    dem_res_np, _, _, _, _ = resolve_flats_barnes_2014(
+        dem_fill_np,
         nodata=np.nan,
         equal_tol=0.0,
         lower_tol=0.0,
-        treat_oob_as_lower = True,
+        treat_oob_as_lower=True,
         apply_to_dem="epsilon",
         epsilon=1e-5,
     )
-    print("✅ Flats resolved.")
+    dt = time.perf_counter() - t0
+    timings["flat_resolution_s"] = dt
+    print(f"Flat resolution completed. ({dt:.2f} s)")
 
-    if flow_method == "mfd_quinn_1991":
-         # --- Flow direction MFD---
-        flow_direction = compute_flow_direction_mfd_quinn_1991(
-            dem_resolved, transform, p=1.0, nodata_mask=nodata_mask
-        )
-        print("✅ Flow direction computed.")
-        
-        # --- Flow accumulation (km2)--- 
-        acc_km2 = compute_flow_accumulation(
-            flow_weights=flow_direction,
-            nodata_mask=nodata_mask,
-            pixel_area_m2=pixel_area_m2_np,
-            out="km2",
-        )
-        
-        # --- Flow accumulation (cells)--- 
-        acc_cells = compute_flow_accumulation(
-            flow_weights=flow_direction,
-            nodata_mask=nodata_mask,
-            out="cells",
-        )
-        print("✅ Flow accumulation computed.")
-        
-    elif flow_method == "d8":
-        # --- Flow direction D8---
-        flow_direction = compute_flow_direction_d8(
-            dem_resolved, transform, nodata_mask=nodata_mask
-        )
-        print("✅ Flow direction computed.")
-
-        # --- Flow accumulation (km2)--- 
-        acc_km2 = compute_flow_accumulation(
-            dir_idx=flow_direction,
-            nodata_mask=nodata_mask,
-            pixel_area_m2=pixel_area_m2_np,
-            out="km2",
-        )
-
-        # --- Flow accumulation (cells)--- 
-        acc_cells = compute_flow_accumulation(
-            dir_idx=flow_direction,
-            nodata_mask=nodata_mask,
-            out="cells",
-        )
-        print("✅ Flow accumulation computed.")
-    else:
-        raise ValueError(f"Unsupported flow_method: {flow_method}")
-
-    # Slope
-    slope_grid = ee.Terrain.slope(ee_dem_grid).toFloat().rename("Slope")
-    slope = slope_grid.clip(geometry)
-    print("✅ Slope computed.")
-    
-    # MERIT Hydro - flow accumulation reference
-    MERIT_flow_accumulation_upa_grid = (
-        ee.Image("MERIT/Hydro/v1_0_1")
-        .select("upa")
-        .reproject(ee_dem_grid.projection())
-        .rename("MERIT_flow_accumulation_upa")
+    flow_res = _compute_flow(
+        dem_np=dem_res_np,
+        transform=transform,
+        nodata_mask=nodata_mask,
+        px_area_np=px_area_np,
+        flow_method=flow_method,
     )
-    MERIT_flow_accumulation_upa = MERIT_flow_accumulation_upa_grid.clip(geometry)
+    acc_km2 = flow_res["acc_km2"]
+    timings.update(flow_res["timings"])
 
-    # CTI reference
-    cti_ic = ee.ImageCollection("projects/sat-io/open-datasets/HYDROGRAPHY90/flow_index/cti")   
-    cti_grid = (
-            cti_ic.mosaic()
-            .toFloat()
-            .divide(ee.Number(1e8))
-            .translate(0, scale.multiply(-1)) # Shift the raster down by 1 pixel (negative Y direction)
-            .reproject(ee_dem_grid.projection()) # Re-apply the DEM grid's projection to align with other layers
-            .rename("CTI")
-        )
-    cti = cti_grid.clip(geometry)
+    t0 = time.perf_counter()
+    slope_grid_ee = ee.Terrain.slope(dem_ee).toFloat().rename("Slope")
+    slope_ee = slope_grid_ee.clip(geom)
+    dt = time.perf_counter() - t0
+    timings["slope_s"] = dt
+    print(f"Slope computed. ({dt:.2f} s)")
 
-    # Branch: cloud mode vs local mode
     if use_bucket:
-        dict_acc = push_array_to_ee_geotiff(
-            acc_km2,
-            transform=transform,
-            crs=crs,
-            nodata_mask=nodata_mask,
-            bucket_name=f"{project_id}-ee-uploads",
+        return _run_cloud(
             project_id=project_id,
-            band_name="flow_accumulation_km2",
-            tmp_dir=grid.get("tmp_dir", None),
-            object_prefix="twi_uploads",
-            nodata_value=-9999.0,
-            # dtype="float32",
-            # build_mask_from_nodata=True,
-        )
-        ee_flow_accumulation_full = dict_acc["image"]
-        # Clip to original ROI
-        ee_flow_accumulation = ee_flow_accumulation_full.clip(geometry)
-        
-        dict_acc_cells = push_array_to_ee_geotiff(
-            acc_cells,
-            transform=transform,
-            crs=crs,
-            nodata_mask=nodata_mask,
-            bucket_name=f"{project_id}-ee-uploads",
-            project_id=project_id,
-            band_name="flow_accumulation_cells",
-            tmp_dir=grid.get("tmp_dir", None),
-            object_prefix="twi_uploads",
-            nodata_value=-9999.0,
-            # dtype="float32",
-            # build_mask_from_nodata=True,
-        )
-        ee_flow_accumulation_cells_full = dict_acc_cells["image"]
-        # Clip to original ROI
-        ee_flow_accumulation_cells = ee_flow_accumulation_cells_full.clip(geometry)
-
-        twi = compute_twi(ee_flow_accumulation, slope).clip(geometry)
-        print("✅ Twi computed.")
-
-        # Visualization
-        vis_twi = vis_2sigma(
-            twi, "TWI", geometry, scale, k=2.0,
-            palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"]
-        )
-        vis_cti = vis_2sigma(
-            cti, "CTI", geometry, scale, k=2.0,
-            palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"]
-        )
-        vis_acc_km2 = vis_2sigma(
-            ee_flow_accumulation, "flow_accumulation_km2", geometry, scale, k=2.0,
-            palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"]
-        )
-        vis_acc_cells = vis_2sigma(
-            ee_flow_accumulation_cells, "flow_accumulation_cells", geometry, scale, k=2.0,
-            palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"]
-        )
-        vis_acc_merit = vis_2sigma(
-            MERIT_flow_accumulation_upa, "MERIT_flow_accumulation_upa", geometry, scale, k=2.0,
-            palette=["#ff0000", "#ffa500", "#ffff00", "#90ee90", "#0000ff"]
-        )
-        vis_slope = vis_2sigma(
-            slope, "Slope", geometry, scale, k=2.0,
-            palette=["#f7fbff", "#deebf7", "#c6dbef", "#9ecae1", "#6baed6", "#4292c6", "#2171b5", "#084594"]
-        )
-
-        Map = visualize_map([
-            (slope, vis_slope, "Slope (°)"),
-            (ee_flow_accumulation_cells, vis_acc_cells, "Flow accumulation (cells)"),
-            (MERIT_flow_accumulation_upa, vis_acc_merit, "(reference) Flow accumulation - MERIT (km²)"),
-            (ee_flow_accumulation, vis_acc_km2, "Flow accumulation (km²)"),
-            (cti, vis_cti, "(reference) CTI - Hydrography90m"),
-            (twi, vis_twi, "TWI"),
-        ])
-        Map.centerObject(geometry, 12)
-
-        return {
-            "dem": ee_dem_grid,
-            
-            "mode": "cloud",
-            "slope": slope,
-            "flow_accumulation_km2": ee_flow_accumulation,
-            "flow_accumulation_km2_full": ee_flow_accumulation_full,
-            "MERIT_flow_accumulation_upa": MERIT_flow_accumulation_upa,
-            
-            "flow_accumulation_cells": ee_flow_accumulation_cells,
-            "flow_accumulation_cells_full": ee_flow_accumulation_cells_full,
-            
-            "twi": twi,
-            "cti_Hydrography90m": cti,
-            
-            "geometry": geometry,
-            "geometry_accum": accum_geometry,
-            "scale": scale,
-            "map": Map,
-        }
-
-    else:
-        # Local mode: slope & TWI in numpy, save TIFFs
-        # Slope via EE → numpy
-        geotiff_slope = export_ee_image_to_geotiff(
-            slope_grid,
-            out_path="slope.tif",
+            geom=geom,
+            geom_acc=geom_acc,
             grid=grid,
-            unmask_value=None,
-            quiet=True,
-        )
-        
-        slope_np = read_geotiff_to_numpy(
-            geotiff_slope,
-            nodata_mask=grid["nodata_mask"],
-        )
-        
-        # Compute twi numpy
-        twi_np = compute_twi_numpy(
-            acc_np=acc_km2,
-            slope_deg_np=slope_np,
-            acc_is_area=True,
-            acc_units="km2",
-            min_slope_deg=0.1,
+            transform=transform,
+            crs=crs,
             nodata_mask=nodata_mask,
-            out_dtype="float32",
-        )
-        print("✅ Twi computed.")
-
-        geotiff_dem = grid["paths"]["dem_elevations"]
-        
-        geotiff_acc_km2 = save_array_as_geotiff(
-            acc_km2, transform, crs, nodata_mask,
-            filename="flow_accumulation_km2.tif", band_name="Flow accumulation (km2)"
-        )
-        geotiff_acc_cells = save_array_as_geotiff(
-            acc_cells, transform, crs, nodata_mask,
-            filename="flow_accumulation_cells.tif", band_name="Flow accumulation (cells)"
-        )
-        geotiff_twi = save_array_as_geotiff(
-            twi_np, transform, crs, nodata_mask,
-            filename="twi.tif", band_name="TWI"
+            dem_ee=dem_ee,
+            slope_ee=slope_ee,
+            scale=scale,
+            acc_km2=acc_km2,
+            ref_layers=ref_layers,
+            cell_count_total=cell_count_total,
+            cell_count_valid=cell_count_valid,
+            cell_count_nodata=cell_count_nodata,
+            timings=timings,
         )
 
-        # Export MERIT Hydro (flow accumulation - upa) to GeoTIFF
-        geotiff_merit_upa = export_ee_image_to_geotiff(MERIT_flow_accumulation_upa_grid, out_path="merit_upa.tif", grid=grid, quiet=True)
+    return _run_local(
+        geom=geom,
+        grid=grid,
+        output_dir=output_dir,
+        transform=transform,
+        crs=crs,
+        nodata_mask=nodata_mask,
+        slope_grid_ee=slope_grid_ee,
+        acc_km2=acc_km2,
+        ref_layers=ref_layers,
+        cell_count_total=cell_count_total,
+        cell_count_valid=cell_count_valid,
+        cell_count_nodata=cell_count_nodata,
+        timings=timings,
+    )
 
-        # Export CTI reference to aligned GeoTIFF
-        geotiff_cti = export_ee_image_to_geotiff(cti_grid, out_path="cti.tif", grid=grid, quiet=True)
-
-        geometry_wgs84 = geometry.getInfo()
-    
-        acc_km2_clipped = clip_tif_by_geojson(geotiff_acc_km2, geometry_wgs84, "acc_km2_clipped.tif", band_name="Flow accumulation (km2)")
-        acc_cells_clipped = clip_tif_by_geojson(geotiff_acc_cells, geometry_wgs84, "acc_cells_clipped.tif", band_name="Flow accumulation (cells)")
-        slope_clipped = clip_tif_by_geojson(geotiff_slope, geometry_wgs84, "slope_clipped.tif", band_name="Slope")
-        twi_clipped = clip_tif_by_geojson(geotiff_twi, geometry_wgs84, "twi_clipped.tif", band_name="TWI")
-
-        # Plot TWI as a static figure from the clipped GeoTIFF
-        print("🖼 Plotting TWI (local mode, percentile stretch)…")
-        plot_tif(
-            twi_clipped,
-            p_low=2.0,
-            p_high=98.0,
-            label="TWI",
-            title="Topographic Wetness Index",
-        )
-
-        # Return metadata and file paths
-        return {
-            "mode": "local",
-            "dem": geotiff_dem,
-            "slope": slope_clipped,
-            "flow_accumulation_km2": acc_km2_clipped,
-            "flow_accumulation_cells": acc_cells_clipped,
-            "MERIT_flow_accumulation_upa": geotiff_merit_upa,
-            "twi": twi_clipped,
-            "cti_Hydrography90m": geotiff_cti,
-            "transform": transform,
-            "crs": crs,
-            "nodata_mask": nodata_mask,
-        }
 
 if __name__ == "__main__":
     _ = run_pipeline()
