@@ -285,6 +285,7 @@ def _run_cloud(
 def _run_local(
     *,
     geom: ee.Geometry,
+    geom_acc: ee.Geometry,
     grid: dict[str, Any],
     output_dir: str,
     transform,
@@ -428,6 +429,8 @@ def _run_local(
         "MERIT_flow_accumulation_upa": merit_upa_tif,
         "twi": twi_clip_tif,
         "cti_Hydrography90m": cti_tif,
+        "geometry": geom,
+        "geometry_accum": geom_acc,
         "transform": transform,
         "crs": crs,
         "nodata_mask": nodata_mask,
@@ -560,6 +563,7 @@ def run_pipeline(
 
     return _run_local(
         geom=geom,
+        geom_acc=geom_acc,
         grid=grid,
         output_dir=output_dir,
         transform=transform,
