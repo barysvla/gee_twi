@@ -212,6 +212,9 @@ def flow_acc(
     # ---------------------------------------------------------------------
     # Step 3: Count upstream inflow dependencies
     # ---------------------------------------------------------------------
+    # `indeg` stores the number of upstream dependencies for each cell,
+    # i.e. how many contributing neighbours must be processed before the
+    # current cell can be safely evaluated in topological order.
     indeg = np.zeros((h, w), dtype=np.int32)
 
     if is_d8:
@@ -247,6 +250,10 @@ def flow_acc(
     # ---------------------------------------------------------------------
     # Step 4: Initialize the processing queue
     # ---------------------------------------------------------------------
+    # Start with cells that have no upstream inflow dependencies.
+    # These correspond to source cells of the flow graph and can be
+    # processed immediately because their initial accumulation value
+    # is already complete.
     q: deque[tuple[int, int]] = deque()
     for i, j in np.argwhere((indeg == 0) & (~nodata)):
         q.append((int(i), int(j)))
@@ -256,6 +263,9 @@ def flow_acc(
     # ---------------------------------------------------------------------
     visited = 0
 
+    # Process cells in dependency order. A cell enters the queue only after
+    # all of its upstream contributors have already been propagated to it,
+    # so `acc[i, j]` is complete at the time of processing.
     while q:
         i, j = q.popleft()
         visited += 1
@@ -271,8 +281,12 @@ def flow_acc(
 
             if 0 <= ni < h and 0 <= nj < w and (not nodata[ni, nj]):
                 acc[ni, nj] += acc[i, j]
+
+                # One upstream dependency of the downstream cell has now been resolved.
                 indeg[ni, nj] -= 1
 
+                # Once all upstream dependencies have been resolved, the downstream
+                # cell is ready for processing.
                 if indeg[ni, nj] == 0:
                     q.append((ni, nj))
 
@@ -289,14 +303,22 @@ def flow_acc(
                 ni, nj = i + di, j + dj
                 if 0 <= ni < h and 0 <= nj < w and (not nodata[ni, nj]):
                     acc[ni, nj] += a * weight
+
+                    # One upstream dependency of the downstream cell has now been resolved.
                     indeg[ni, nj] -= 1
 
+                    # Once all upstream dependencies have been resolved, the downstream
+                    # cell is ready for processing.
                     if indeg[ni, nj] == 0:
                         q.append((ni, nj))
 
     # ---------------------------------------------------------------------
     # Step 6: Optionally verify complete processing
     # ---------------------------------------------------------------------
+    # In a valid flow graph, all valid cells must be reachable in a
+    # topological traversal. If not, the routing graph likely contains
+    # a cycle, which usually indicates unresolved flats, depressions,
+    # or invalid flow-direction input.
     if cycle_check:
         if visited != int((~nodata).sum()):
             raise RuntimeError(
