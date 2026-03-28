@@ -4,7 +4,8 @@ from __future__ import annotations
 Depression filling as the first step of DEM hydrological conditioning.
 
 The function `fill_depressions` removes closed depressions in a DEM
-using the Priority-Flood algorithm before subsequent flat resolution.
+using the original single-queue Priority-Flood algorithm (Algorithm 1
+in Barnes et al., 2014) before subsequent flat resolution.
 """
 
 import heapq
@@ -27,44 +28,52 @@ def fill_depressions(
     return_fill_depth: bool = False,
 ) -> Union[np.ndarray, Tuple[np.ndarray, np.ndarray]]:
     """
-    Fill closed depressions in a raster DEM using the Priority-Flood algorithm.
-
-    This function implements the basic Priority-Flood algorithm for
-    depression filling in digital elevation models, following Barnes,
-    Lehman, and Mulla (2014). The implementation corresponds to the
-    basic variant based on a single priority queue.
-
-    The algorithm processes cells in order of increasing elevation,
-    starting from outlet cells. If a newly reached cell lies below the
-    current spill elevation, its value is raised to the spill level.
-    This ensures that each valid cell drains to an outlet and that
-    closed depressions are removed.
-
+    Fill closed depressions in a raster DEM using the original Priority-Flood algorithm.
+    
+    This function implements Algorithm 1 (original Priority-Flood) as
+    described by Barnes, Lehman, and Mulla (2014), based on a single
+    priority queue.
+    
+    The algorithm starts from raster-edge outlet cells and processes cells
+    in priority order from the lowest currently known drainage level
+    connected to an outlet. When a newly reached valid neighbour lies
+    below the current spill level, its elevation is raised to that level.
+    In this way, closed depressions are removed relative to the chosen
+    outlet set.
+    
+    Relative to the reference implementation, this version optionally
+    extends the outlet seed set by including valid cells adjacent to
+    masked internal NoData regions, allowing such regions to act as
+    additional drainage boundaries in finite raster domains.
+    
+    The resulting DEM is hydrologically conditioned with respect to
+    closed depressions, but it may still contain flat areas and is
+    therefore intended to be followed by a flat-resolution step before
+    flow-direction assignment.
+    
     The procedure consists of the following steps:
-
+    
     Step 0
         Prepare the DEM, derive the valid-data mask, and initialize the
         priority queue and visited mask.
-
+    
     Step 1
         Seed all valid raster-edge cells into the priority queue.
-
+    
     Step 2
-        Optionally seed valid cells adjacent to internal NoData regions,
-        allowing masked regions to act as additional outlets.
-
+        Optionally seed additional valid cells adjacent to masked internal
+        NoData regions, allowing such regions to act as supplementary
+        drainage boundaries.
+    
     Step 3
-        Propagate inward from the lowest queued cell and raise neighbour
-        elevations where required to remove closed depressions.
-
+        Repeatedly pop the lowest-priority queued cell, visit its
+        unprocessed neighbours, and raise neighbour elevations to the
+        current spill level where necessary.
+    
     Step 4
         Restore the original NoData mask in the output raster and
         optionally compute per-cell fill depth.
-
-    Relative to the reference implementation, this version adds optional
-    handling of internal NoData-adjacent cells as outlet seeds for
-    finite and masked raster domains.
-
+    
     Parameters
     ----------
     dem : np.ndarray
@@ -73,21 +82,21 @@ def fill_depressions(
         NoData marker. If set to NaN, all non-finite values are treated
         as invalid.
     seed_internal_nodata_as_outlet : bool, default=True
-        If True, valid cells adjacent to internal NoData regions are
-        treated as additional outlet seeds.
+        If True, valid cells adjacent to masked internal NoData regions
+        are treated as additional outlet seeds.
     return_fill_depth : bool, default=False
         If True, also return the per-cell fill depth, defined as the
         filled elevation minus the original elevation.
-
+    
     Returns
     -------
     dem_filled : np.ndarray
         Depression-filled DEM with NoData preserved.
     fill_depth : np.ndarray, optional
         Per-cell fill depth. Returned only if `return_fill_depth=True`.
-
-    Reference
-    ---------
+    
+    References
+    ----------
     Barnes, R., Lehman, C., Mulla, D. (2014).
     Priority-Flood: An optimal depression-filling and watershed-labeling
     algorithm for digital elevation models.
@@ -111,6 +120,10 @@ def fill_depressions(
     else:
         valid_mask = np.isfinite(dem_values) & (dem_values != nodata)
 
+    # `valid_mask` defines the computational domain of the DEM.
+    # `visited_mask` tracks cells that have already been inserted into the
+    # flood structure so that each valid cell is processed only once.
+    # `dem_filled` is updated in place as depressions are filled.
     dem_filled = dem_values.copy()
     visited_mask = np.zeros_like(valid_mask, dtype=bool)
     priority_queue: List[Tuple[float, int, int]] = []
@@ -137,8 +150,12 @@ def fill_depressions(
             visited_mask[r, n_cols - 1] = True
 
     # ---------------------------------------------------------------------
-    # Step 2: Optionally seed cells adjacent to internal NoData regions
+    # Step 2: Optionally seed additional cells adjacent to masked internal voids
     # ---------------------------------------------------------------------
+    # In finite or masked raster domains, internal NoData regions may be
+    # intended to behave as open drainage boundaries rather than as closed
+    # obstacles. Seeding their valid neighbours allows the flood to start
+    # from these boundaries as additional outlets.
     if seed_internal_nodata_as_outlet:
         for r in range(n_rows):
             for c in range(n_cols):
@@ -163,9 +180,13 @@ def fill_depressions(
             if (not in_bounds(rr, cc)) or (not valid_mask[rr, cc]) or visited_mask[rr, cc]:
                 continue
 
+            # Mark the neighbour as visited at insertion time so that it enters
+            # the priority queue only once. This matches the standard flood-style
+            # traversal logic used in Priority-Flood.
             visited_mask[rr, cc] = True
 
-            # Raise the neighbour to the current spill elevation if needed.
+            # If the neighbour lies below the lowest known drainage level reaching
+            # this cell, raise it to that spill level so it becomes drainable.
             if dem_filled[rr, cc] < water_level:
                 dem_filled[rr, cc] = water_level
 
