@@ -16,11 +16,11 @@ import numpy as np
 
 # D8 neighbourhood offsets.
 # The order is fixed because the index is used as the encoded
-# flow-direction value (0..7).
+# flow-direction value:
+# 0..7 = [NE, E, SE, S, SW, W, NW, N]
 NEIGHBOR_OFFSETS_8: List[Tuple[int, int]] = [
-    (-1, -1), (-1, 0), (-1, 1),
-    (0, -1),           (0, 1),
-    (1, -1),  (1, 0),  (1, 1),
+    (-1, 1), (0, 1), (1, 1), (1, 0),
+    (1, -1), (0, -1), (-1, -1), (-1, 0),
 ]
 
 # Special flow-direction codes.
