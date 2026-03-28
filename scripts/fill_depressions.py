@@ -131,20 +131,27 @@ def fill_depressions(
     # ---------------------------------------------------------------------
     # Step 1: Seed valid raster-edge cells
     # ---------------------------------------------------------------------
+    # Seed all valid edge cells as initial outlets.
+    # These cells have a guaranteed drainage path outside the DEM domain
+    # and therefore define the starting points of the flood.
     for c in range(n_cols):
+        # Top edge (row 0)
         if valid_mask[0, c] and not visited_mask[0, c]:
             heapq.heappush(priority_queue, (dem_filled[0, c], 0, c))
             visited_mask[0, c] = True
-
+    
+        # Bottom edge (last row)
         if valid_mask[n_rows - 1, c] and not visited_mask[n_rows - 1, c]:
             heapq.heappush(priority_queue, (dem_filled[n_rows - 1, c], n_rows - 1, c))
             visited_mask[n_rows - 1, c] = True
-
+    
     for r in range(1, n_rows - 1):
+        # Left edge (column 0, excluding corners)
         if valid_mask[r, 0] and not visited_mask[r, 0]:
             heapq.heappush(priority_queue, (dem_filled[r, 0], r, 0))
             visited_mask[r, 0] = True
-
+    
+        # Right edge (last column, excluding corners)
         if valid_mask[r, n_cols - 1] and not visited_mask[r, n_cols - 1]:
             heapq.heappush(priority_queue, (dem_filled[r, n_cols - 1], r, n_cols - 1))
             visited_mask[r, n_cols - 1] = True
@@ -165,6 +172,8 @@ def fill_depressions(
                 for dr, dc in NEIGHBOR_OFFSETS_8:
                     rr, cc = r + dr, c + dc
                     if (not in_bounds(rr, cc)) or (not valid_mask[rr, cc]):
+                        # As soon as one invalid neighbour is found, the cell is
+                        # treated as adjacent to a drainage boundary and seeded once.
                         heapq.heappush(priority_queue, (dem_filled[r, c], r, c))
                         visited_mask[r, c] = True
                         break
