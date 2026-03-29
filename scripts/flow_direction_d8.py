@@ -3,10 +3,10 @@ from __future__ import annotations
 """
 D8 flow-direction computation for DEM-based flow routing.
 
-This script computes flow directions in a raster DEM using the D8
-single-flow-direction approach, where each cell is assigned to one
-downslope neighbour. It is used after hydrological conditioning to
-define the drainage network for subsequent flow accumulation.
+This script computes D8 flow directions in a raster DEM by assigning
+each valid cell to the neighbouring cell with the maximum downslope
+gradient. It is intended for use after hydrological conditioning as
+input for subsequent flow-accumulation calculation.
 """
 
 from typing import Tuple
@@ -21,6 +21,10 @@ D8_OFFSETS: list[Tuple[int, int]] = [
     (-1, 1), (0, 1), (1, 1), (1, 0),
     (1, -1), (0, -1), (-1, -1), (-1, 0),
 ]
+
+# Special flow-direction codes.
+NODATA_DIR: int = -1
+NOFLOW_DIR: int = -2
 
 
 def flow_dir_d8(
@@ -62,11 +66,13 @@ def flow_dir_d8(
         the direction with the maximum downslope gradient.
 
     Step 4
-        Assign direction indices and restore NoData values.
-
+        Store the selected direction indices and explicitly mark NoData cells
+        in the output.
+    
     Directions are encoded as:
         0..7 = [NE, E, SE, S, SW, W, NW, N]
-        -1   = NoData or no valid downslope neighbour
+        -1   = NoData cell (`NODATA_DIR`)
+        -2   = valid cell without a downslope neighbour (`NOFLOW_DIR`)
 
     Parameters
     ----------
@@ -107,7 +113,7 @@ def flow_dir_d8(
         raise ValueError("Rotated or sheared transforms are not supported.")
 
     # ---------------------------------------------------------------------
-    # Step 1: Derive NoData mask
+    # Step 1: Derive the valid computational domain
     # ---------------------------------------------------------------------
     if nodata_mask is not None:
         nodata = np.asarray(nodata_mask, dtype=bool)
@@ -122,6 +128,8 @@ def flow_dir_d8(
     # ---------------------------------------------------------------------
     # Step 2: Compute neighbour distances in CRS units
     # ---------------------------------------------------------------------
+    # Compute step lengths so that cardinal and diagonal neighbours are
+    # compared using local gradient rather than raw elevation drop.
     dx = float(abs(transform.a))
     dy = float(abs(transform.e))
     d_diag = float(np.hypot(dx, dy))
@@ -135,7 +143,9 @@ def flow_dir_d8(
     # ---------------------------------------------------------------------
     # Step 3: Evaluate downslope directions
     # ---------------------------------------------------------------------
-    dir_idx = np.full((h, w), -1, dtype=out_dtype)
+    # For each valid cell, evaluate all valid neighbours and select the
+    # downslope direction with the maximum local gradient.
+    dir_idx = np.full((h, w), NOFLOW_DIR, dtype=out_dtype)
 
     for i in range(h):
         for j in range(w):
@@ -144,7 +154,7 @@ def flow_dir_d8(
 
             zc = z[i, j]
 
-            best_k = -1
+            best_k = NOFLOW_DIR
             best_tan = -np.inf
 
             for k, (di, dj) in enumerate(D8_OFFSETS):
@@ -164,15 +174,20 @@ def flow_dir_d8(
                     continue
 
                 tan_beta = dz / d
+                
+                # Keep the direction with the steepest downslope gradient.
+                # In tie cases, the first encountered direction in D8_OFFSETS order
+                # is retained.
                 if tan_beta > best_tan:
                     best_tan = tan_beta
                     best_k = k
 
+            # If no downslope neighbour was found, the cell remains marked as NOFLOW_DIR.
             dir_idx[i, j] = best_k
 
     # ---------------------------------------------------------------------
-    # Step 4: Restore NoData values
+    # Step 4: Finalize output and mark NoData cells
     # ---------------------------------------------------------------------
-    dir_idx[nodata] = -1
+    dir_idx[nodata] = NODATA_DIR
 
     return dir_idx
