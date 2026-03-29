@@ -273,6 +273,10 @@ def _run_cloud(
         nodata_value=-9999.0,
     )
     acc_km2_ee_full = acc_km2_res["image"]
+    del acc_km2
+    del acc_km2_res
+    gc.collect()
+
     acc_km2_ee = acc_km2_ee_full.clip(geom)
 
     # ---------------------------------------------------------------------
