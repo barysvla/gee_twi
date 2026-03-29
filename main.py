@@ -21,10 +21,10 @@ import os
 
 import ee
 import numpy as np
-import gc
 
 from scripts.fill_depressions import fill_depressions
 from scripts.flow_accumulation import flow_acc
+from scripts.flow_direction_d8 import flow_dir_d8
 from scripts.flow_direction_mfd import flow_dir_mfd_quinn_1991
 from scripts.geotiff_io import clip_tif, read_tif, save_tif
 from scripts.grid_io import export_dem_grid, ee_to_tif
@@ -99,19 +99,15 @@ def _compute_flow(
     nodata_mask,
     px_area_np,
     flow_method: str,
-    d8_dir_idx=None,
-):
+) -> dict[str, Any]:
     """
-    Derive routing outputs and compute flow accumulation for the selected
-    routing method.
+    Compute flow direction and flow accumulation for the selected routing method.
 
-    For the MFD branch, flow directions are derived from the DEM after
-    hydrological conditioning. For the D8 branch, precomputed flat-resolved
-    D8 flow directions may be supplied directly and reused without
-    recomputation.
+    Depending on the selected option, the function runs either D8 or MFD
+    flow routing and then derives flow accumulation in square kilometres.
     """
     if flow_method == "mfd_quinn_1991":
-        flow_weights = flow_dir_mfd_quinn_1991(
+        dir_out = flow_dir_mfd_quinn_1991(
             dem_np,
             transform,
             nodata_mask=nodata_mask,
@@ -119,32 +115,38 @@ def _compute_flow(
         print("Flow direction computed.")
 
         acc_km2 = flow_acc(
-            flow_weights=flow_weights,
+            flow_weights=dir_out,
             nodata_mask=nodata_mask,
             pixel_area_m2=px_area_np,
             out="km2",
         )
         print("Flow accumulation computed.")
 
-        del flow_weights
-        gc.collect()
-        return acc_km2
+        return {
+            "dir": dir_out,
+            "acc_km2": acc_km2,
+        }
 
     if flow_method == "d8":
-        if d8_dir_idx is None:
-            raise ValueError("Missing precomputed D8 flow directions for flow_method='d8'.")
-
-        print("Flow direction reused from flat-resolution output.")
+        dir_out = flow_dir_d8(
+            dem_np,
+            transform,
+            nodata_mask=nodata_mask,
+        )
+        print("Flow direction computed.")
 
         acc_km2 = flow_acc(
-            dir_idx=d8_dir_idx,
+            dir_idx=dir_out,
             nodata_mask=nodata_mask,
             pixel_area_m2=px_area_np,
             out="km2",
         )
         print("Flow accumulation computed.")
 
-        return acc_km2
+        return {
+            "dir": dir_out,
+            "acc_km2": acc_km2,
+        }
 
     raise ValueError(f"Unsupported flow_method: {flow_method}")
 
@@ -408,9 +410,6 @@ def _run_local(
     )
     print("TWI computed.")
 
-    del slope_np
-    gc.collect()
-    
     # ---------------------------------------------------------------------
     # Step 3: Save local rasters
     # ---------------------------------------------------------------------
@@ -424,10 +423,6 @@ def _run_local(
         filename=acc_km2_tif_path,
         band_name="Flow accumulation (km2)",
     )
-
-    del acc_km2
-    gc.collect()
-    
     twi_tif = save_tif(
         twi_arr,
         transform,
@@ -437,9 +432,6 @@ def _run_local(
         band_name="TWI",
     )
 
-    del twi_arr
-    gc.collect()
-    
     # ---------------------------------------------------------------------
     # Step 4: Clip rasters to the target geometry
     # ---------------------------------------------------------------------
@@ -559,8 +551,7 @@ def run_pipeline(
         Perform hydrological conditioning on the DEM in local arrays.
 
     Step 4
-        Derive routing outputs for the selected flow method and compute
-        flow accumulation.
+        Compute flow direction and flow accumulation.
 
     Step 5
         Compute slope on the Earth Engine grid.
@@ -653,62 +644,29 @@ def run_pipeline(
     )
     print("Depression filling completed.")
 
-    del dem_np
-    gc.collect()
-    
-    # Flat resolution is applied in both branches, but the required outputs differ:
-    # - MFD: only the epsilon-modified DEM is needed for subsequent routing,
-    #   so D8 flow directions computed internally are discarded.
-    # - D8: flat-resolved D8 flow directions are reused directly and must be returned.
-    if flow_method == "mfd_quinn_1991":
-        dem_res_np, _, _, _, _ = resolve_flats_barnes_2014(
-            dem_fill_np,
-            transform,
-            nodata=np.nan,
-            equal_tol=0.0,
-            treat_oob_as_lower=True,
-            apply_to_dem="epsilon",
-            epsilon=1e-5,
-        )
-        flowdirs_d8_np = None
-    
-    elif flow_method == "d8":
-        dem_res_np, _, _, flowdirs_d8_np, _ = resolve_flats_barnes_2014(
-            dem_fill_np,
-            transform,
-            nodata=np.nan,
-            equal_tol=0.0,
-            treat_oob_as_lower=True,
-            apply_to_dem="none",
-            epsilon=1e-5,
-        )
-    
-    else:
-        raise ValueError(f"Unsupported flow_method: {flow_method}")
-    
+    dem_res_np, _, _, _, _ = resolve_flats_barnes_2014(
+        dem_fill_np,
+        nodata=np.nan,
+        equal_tol=0.0,
+        lower_tol=0.0,
+        treat_oob_as_lower=True,
+        apply_to_dem="epsilon",
+        epsilon=1e-5,
+    )
     print("Flat resolution completed.")
 
-    del dem_fill_np
-    gc.collect()
-    
     # ---------------------------------------------------------------------
     # Step 4: Compute flow direction and flow accumulation
     # ---------------------------------------------------------------------
-    acc_km2 = _compute_flow(
+    flow_res = _compute_flow(
         dem_np=dem_res_np,
         transform=transform,
         nodata_mask=nodata_mask,
         px_area_np=px_area_np,
         flow_method=flow_method,
-        d8_dir_idx=flowdirs_d8_np if flow_method == "d8" else None,
     )
+    acc_km2 = flow_res["acc_km2"]
 
-    if flow_method == "d8":
-        del flowdirs_d8_np
-    del dem_res_np
-    del px_area_np
-    gc.collect()
-    
     # ---------------------------------------------------------------------
     # Step 5: Compute slope on the aligned Earth Engine grid
     # ---------------------------------------------------------------------
