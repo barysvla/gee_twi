@@ -12,6 +12,8 @@ consistently across previously flat surfaces.
 from collections import deque
 from typing import Deque, Dict, List, Optional, Tuple
 
+from scripts.flow_direction_d8 import flow_dir_d8, NODATA_DIR, NOFLOW_DIR
+
 import numpy as np
 
 # D8 neighbourhood offsets.
@@ -23,9 +25,6 @@ NEIGHBOR_OFFSETS_8: List[Tuple[int, int]] = [
     (1, -1), (0, -1), (-1, -1), (-1, 0),
 ]
 
-# Special flow-direction codes.
-NODATA_DIR: int = -1
-NOFLOW_DIR: int = -2
 
 # Queue marker separating breadth-first expansion levels.
 QUEUE_MARKER: Tuple[int, int] = (-1, -1)
@@ -46,10 +45,10 @@ def _deduplicate_queue(q: Deque[Tuple[int, int]]) -> Deque[Tuple[int, int]]:
 
 def resolve_flats_barnes_2014(
     dem: np.ndarray,
+    transform,
     nodata: float = np.nan,
     *,
     equal_tol: float = 0.0,
-    lower_tol: float = 0.0,
     treat_oob_as_lower: bool = True,
     apply_to_dem: str = "none",
     epsilon: float = 1e-5,
@@ -67,8 +66,9 @@ def resolve_flats_barnes_2014(
     The procedure consists of the following steps:
     
     Step 0
-        Compute initial D8 flow directions. Cells without a strictly lower
-        neighbour are marked as `NOFLOW_DIR`.
+        Compute initial D8 flow directions using the maximum-slope
+        criterion. Cells without a downslope neighbour are marked as
+        `NOFLOW_DIR`.
     
     Step 1
         Identify flat-edge cells adjacent to higher terrain (`high_edges`)
@@ -101,15 +101,15 @@ def resolve_flats_barnes_2014(
     ----------
     dem : np.ndarray
         Two-dimensional DEM array.
+    transform : affine.Affine
+        Affine transform describing raster georeferencing. It is used to
+        compute initial D8 flow directions by the maximum-slope criterion.
     nodata : float, default=np.nan
         NoData marker. If set to NaN, all non-finite values are treated as
         invalid.
     equal_tol : float, default=0.0
         Absolute tolerance used when comparing elevations for flat membership
         and equal-elevation edge detection.
-    lower_tol : float, default=0.0
-        Minimum required elevation drop for a neighbour to be considered
-        strictly lower.
     treat_oob_as_lower : bool, default=True
         If True, raster-edge cells are treated as draining outward when no
         strictly lower in-bounds neighbour exists.
@@ -166,10 +166,6 @@ def resolve_flats_barnes_2014(
         """Return True if two elevations are equal within `equal_tol`."""
         return abs(a - b) <= equal_tol
 
-    def is_strictly_lower(z_here: float, z_nbr: float) -> bool:
-        """Return True if the neighbour is lower by more than `lower_tol`."""
-        return (z_nbr - z_here) < -lower_tol
-
     def is_edge_cell(r: int, c: int) -> bool:
         """Return True if the cell lies on the raster boundary."""
         return r == 0 or c == 0 or r == n_rows - 1 or c == n_cols - 1
@@ -177,51 +173,30 @@ def resolve_flats_barnes_2014(
     # ---------------------------------------------------------------------
     # Step 0: Compute initial D8 flow directions
     # ---------------------------------------------------------------------
-    # Determine preliminary D8 flow directions to identify cells without a
-    # local downslope. Cells with no strictly lower neighbour are marked as
-    # `NOFLOW_DIR` and represent candidates for flat areas to be resolved.
-    flowdirs = np.full((n_rows, n_cols), NODATA_DIR, dtype=np.int16)
+    # Compute preliminary D8 flow directions using the standard
+    # maximum-slope criterion. Valid cells without a downslope neighbour
+    # are marked as `NOFLOW_DIR` and represent candidates for flat areas
+    # to be resolved.
+    flowdirs = flow_dir_d8(
+        dem_values,
+        transform,
+        nodata_value=nodata,
+        out_dtype=np.int16,
+    )
 
-    for r in range(n_rows):
-        for c in range(n_cols):
-            if not valid[r, c]:
-                continue
+    # Optionally treat raster-edge cells without an in-bounds downslope
+    # neighbour as draining outward across the DEM boundary.
+    # if treat_oob_as_lower:
+    #     for r in range(n_rows):
+    #         for c in range(n_cols):
+    #             if not valid[r, c]:
+    #                 continue
+    #             if not is_edge_cell(r, c):
+    #                 continue
+    #             if flowdirs[r, c] != NOFLOW_DIR:
+    #                 continue
 
-            z0 = dem_values[r, c]
-
-            if treat_oob_as_lower and is_edge_cell(r, c):
-                # Prefer a real downslope neighbour when available.
-                # Otherwise encode outward drainage at the raster boundary.
-                best_dir: Optional[int] = None
-                best_z = z0
-
-                for k, (dr, dc) in enumerate(NEIGHBOR_OFFSETS_8):
-                    nr, nc = r + dr, c + dc
-                    if not in_bounds(nr, nc) or not valid[nr, nc]:
-                        continue
-
-                    zn = dem_values[nr, nc]
-                    if is_strictly_lower(z0, zn) and (best_dir is None or zn < best_z):
-                        best_dir = k
-                        best_z = zn
-
-                flowdirs[r, c] = 0 if best_dir is None else best_dir
-                continue
-
-            best_dir = None
-            best_z = z0
-
-            for k, (dr, dc) in enumerate(NEIGHBOR_OFFSETS_8):
-                nr, nc = r + dr, c + dc
-                if not in_bounds(nr, nc) or not valid[nr, nc]:
-                    continue
-
-                zn = dem_values[nr, nc]
-                if is_strictly_lower(z0, zn) and (best_dir is None or zn < best_z):
-                    best_dir = k
-                    best_z = zn
-
-            flowdirs[r, c] = NOFLOW_DIR if best_dir is None else best_dir
+    #             flowdirs[r, c] = 0
 
     # ---------------------------------------------------------------------
     # Step 1: Identify flat boundary cells
@@ -239,6 +214,15 @@ def resolve_flats_barnes_2014(
                 continue
     
             z0 = dem_values[r, c]
+    
+            # Treat raster-edge cells without a downslope neighbour as drainable
+            # flat outlets when outward drainage across the DEM boundary is allowed.
+            if (
+                treat_oob_as_lower
+                and is_edge_cell(r, c)
+                and flowdirs[r, c] == NOFLOW_DIR
+            ):
+                low_edges.append((r, c))
     
             for dr, dc in NEIGHBOR_OFFSETS_8:
                 nr, nc = r + dr, c + dc
