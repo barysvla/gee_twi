@@ -4,13 +4,13 @@ from typing import Any
 from datetime import datetime
 import time
 import os
+import gc
 
 import ee
 import numpy as np
 
 from scripts.fill_depressions import fill_depressions
 from scripts.flow_accumulation import flow_acc
-from scripts.flow_direction_d8 import flow_dir_d8
 from scripts.flow_direction_mfd import flow_dir_mfd_quinn_1991
 from scripts.geotiff_io import clip_tif, read_tif, save_tif
 from scripts.grid_io import export_dem_grid, ee_to_tif
@@ -82,12 +82,13 @@ def _compute_flow(
     nodata_mask,
     px_area_np,
     flow_method: str,
-) -> dict[str, Any]:
+    d8_dir_idx=None,
+):
     timings = {}
 
     if flow_method == "mfd_quinn_1991":
         t0 = time.perf_counter()
-        dir_out = flow_dir_mfd_quinn_1991(
+        flow_weights = flow_dir_mfd_quinn_1991(
             dem_np,
             transform,
             nodata_mask=nodata_mask,
@@ -98,7 +99,7 @@ def _compute_flow(
 
         t0 = time.perf_counter()
         acc_km2 = flow_acc(
-            flow_weights=dir_out,
+            flow_weights=flow_weights,
             nodata_mask=nodata_mask,
             pixel_area_m2=px_area_np,
             out="km2",
@@ -107,36 +108,33 @@ def _compute_flow(
         timings["flow_accumulation_s"] = dt_acc
         print(f"Flow accumulation computed. ({dt_acc:.2f} s)")
 
+        del flow_weights
+        gc.collect()
+
         return {
-            "dir": dir_out,
             "acc_km2": acc_km2,
             "timings": timings,
         }
 
     if flow_method == "d8":
-        t0 = time.perf_counter()
-        dir_out = flow_dir_d8(
-            dem_np,
-            transform,
-            nodata_mask=nodata_mask,
-        )
-        dt_dir = time.perf_counter() - t0
-        timings["flow_direction_s"] = dt_dir
-        print(f"Flow direction computed. ({dt_dir:.2f} s)")
+        if d8_dir_idx is None:
+            raise ValueError("Missing precomputed D8 flow directions for flow_method='d8'.")
 
         t0 = time.perf_counter()
         acc_km2 = flow_acc(
-            dir_idx=dir_out,
+            dir_idx=d8_dir_idx,
             nodata_mask=nodata_mask,
             pixel_area_m2=px_area_np,
             out="km2",
         )
         dt_acc = time.perf_counter() - t0
+        timings["flow_direction_s"] = 0.0
         timings["flow_accumulation_s"] = dt_acc
+
+        print("Flow direction reused from flat-resolution output.")
         print(f"Flow accumulation computed. ({dt_acc:.2f} s)")
 
         return {
-            "dir": dir_out,
             "acc_km2": acc_km2,
             "timings": timings,
         }
@@ -345,6 +343,9 @@ def _run_local(
     timings["twi_s"] = dt
     print(f"TWI computed. ({dt:.2f} s)")
 
+    del slope_np
+    gc.collect()
+
     dem_tif = grid["paths"]["dem_elevations"]
 
     acc_km2_tif = save_tif(
@@ -355,6 +356,10 @@ def _run_local(
         filename=acc_km2_tif_path,
         band_name="Flow accumulation (km2)",
     )
+
+    del acc_km2
+    gc.collect()
+
     twi_tif = save_tif(
         twi_arr,
         transform,
@@ -363,6 +368,9 @@ def _run_local(
         filename=twi_tif_path,
         band_name="TWI",
     )
+
+    del twi_arr
+    gc.collect()
 
     geom_wgs84 = geom.getInfo()
 
@@ -510,19 +518,42 @@ def run_pipeline(
     timings["depression_filling_s"] = dt
     print(f"Depression filling completed. ({dt:.2f} s)")
 
+    del dem_np
+    gc.collect()
+
     t0 = time.perf_counter()
-    dem_res_np, _, _, _, _ = resolve_flats_barnes_2014(
-        dem_fill_np,
-        nodata=np.nan,
-        equal_tol=0.0,
-        lower_tol=0.0,
-        treat_oob_as_lower=True,
-        apply_to_dem="epsilon",
-        epsilon=1e-5,
-    )
+    if flow_method == "mfd_quinn_1991":
+        dem_res_np, _, _, _, _ = resolve_flats_barnes_2014(
+            dem_fill_np,
+            transform,
+            nodata=np.nan,
+            equal_tol=0.0,
+            treat_oob_as_lower=True,
+            apply_to_dem="epsilon",
+            epsilon=1e-5,
+        )
+        flowdirs_d8_np = None
+
+    elif flow_method == "d8":
+        dem_res_np, _, _, flowdirs_d8_np, _ = resolve_flats_barnes_2014(
+            dem_fill_np,
+            transform,
+            nodata=np.nan,
+            equal_tol=0.0,
+            treat_oob_as_lower=True,
+            apply_to_dem="none",
+            epsilon=1e-5,
+        )
+
+    else:
+        raise ValueError(f"Unsupported flow_method: {flow_method}")
+
     dt = time.perf_counter() - t0
     timings["flat_resolution_s"] = dt
     print(f"Flat resolution completed. ({dt:.2f} s)")
+
+    del dem_fill_np
+    gc.collect()
 
     flow_res = _compute_flow(
         dem_np=dem_res_np,
@@ -530,9 +561,16 @@ def run_pipeline(
         nodata_mask=nodata_mask,
         px_area_np=px_area_np,
         flow_method=flow_method,
+        d8_dir_idx=flowdirs_d8_np if flow_method == "d8" else None,
     )
     acc_km2 = flow_res["acc_km2"]
     timings.update(flow_res["timings"])
+
+    if flow_method == "d8":
+        del flowdirs_d8_np
+    del dem_res_np
+    del px_area_np
+    gc.collect()
 
     t0 = time.perf_counter()
     slope_grid_ee = ee.Terrain.slope(dem_ee).toFloat().rename("Slope")
