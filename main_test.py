@@ -82,7 +82,6 @@ def _compute_flow(
     nodata_mask,
     px_area_np,
     flow_method: str,
-    d8_dir_idx=None,
 ):
     timings = {}
 
@@ -117,22 +116,29 @@ def _compute_flow(
         }
 
     if flow_method == "d8":
-        if d8_dir_idx is None:
-            raise ValueError("Missing precomputed D8 flow directions for flow_method='d8'.")
+        t0 = time.perf_counter()
+        dir_out = flow_dir_d8(
+            dem_np,
+            transform,
+            nodata_mask=nodata_mask,
+        )
+        dt_dir = time.perf_counter() - t0
+        timings["flow_direction_s"] = dt_dir
+        print(f"Flow direction computed. ({dt_dir:.2f} s)")
 
         t0 = time.perf_counter()
         acc_km2 = flow_acc(
-            dir_idx=d8_dir_idx,
+            dir_idx=dir_out,
             nodata_mask=nodata_mask,
             pixel_area_m2=px_area_np,
             out="km2",
         )
         dt_acc = time.perf_counter() - t0
-        timings["flow_direction_s"] = 0.0
         timings["flow_accumulation_s"] = dt_acc
-
-        print("Flow direction reused from flat-resolution output.")
         print(f"Flow accumulation computed. ({dt_acc:.2f} s)")
+
+        del dir_out
+        gc.collect()
 
         return {
             "acc_km2": acc_km2,
@@ -521,53 +527,34 @@ def run_pipeline(
     del dem_np
     gc.collect()
 
-    t0 = time.perf_counter()
-    if flow_method == "mfd_quinn_1991":
-        dem_res_np, _, _, _, _ = resolve_flats_barnes_2014(
-            dem_fill_np,
-            transform,
-            nodata=np.nan,
-            equal_tol=0.0,
-            treat_oob_as_lower=True,
-            apply_to_dem="epsilon",
-            epsilon=1e-5,
-        )
-        flowdirs_d8_np = None
-
-    elif flow_method == "d8":
-        dem_res_np, _, _, flowdirs_d8_np, _ = resolve_flats_barnes_2014(
-            dem_fill_np,
-            transform,
-            nodata=np.nan,
-            equal_tol=0.0,
-            treat_oob_as_lower=True,
-            apply_to_dem="none",
-            epsilon=1e-5,
-        )
-
-    else:
-        raise ValueError(f"Unsupported flow_method: {flow_method}")
-
+   t0 = time.perf_counter()
+    dem_res_np, _, _, _ = resolve_flats_barnes_2014(
+        dem_fill_np,
+        nodata=np.nan,
+        equal_tol=0.0,
+        lower_tol=0.0,
+        treat_oob_as_lower=True,
+        apply_to_dem="epsilon",
+        epsilon=1e-5,
+    )
     dt = time.perf_counter() - t0
     timings["flat_resolution_s"] = dt
     print(f"Flat resolution completed. ({dt:.2f} s)")
-
+    
     del dem_fill_np
     gc.collect()
-
+    
     flow_res = _compute_flow(
         dem_np=dem_res_np,
         transform=transform,
         nodata_mask=nodata_mask,
         px_area_np=px_area_np,
         flow_method=flow_method,
-        d8_dir_idx=flowdirs_d8_np if flow_method == "d8" else None,
     )
+    
     acc_km2 = flow_res["acc_km2"]
     timings.update(flow_res["timings"])
-
-    if flow_method == "d8":
-        del flowdirs_d8_np
+    
     del dem_res_np
     del px_area_np
     gc.collect()
