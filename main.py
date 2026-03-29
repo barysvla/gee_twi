@@ -21,6 +21,7 @@ import os
 
 import ee
 import numpy as np
+import gc
 
 from scripts.fill_depressions import fill_depressions
 from scripts.flow_accumulation import flow_acc
@@ -99,7 +100,7 @@ def _compute_flow(
     nodata_mask,
     px_area_np,
     flow_method: str,
-) -> dict[str, Any]:
+):
     """
     Compute flow direction and flow accumulation for the selected routing method.
 
@@ -122,10 +123,9 @@ def _compute_flow(
         )
         print("Flow accumulation computed.")
 
-        return {
-            "dir": dir_out,
-            "acc_km2": acc_km2,
-        }
+        del dir_out
+        gc.collect()
+        return acc_km2
 
     if flow_method == "d8":
         dir_out = flow_dir_d8(
@@ -143,10 +143,9 @@ def _compute_flow(
         )
         print("Flow accumulation computed.")
 
-        return {
-            "dir": dir_out,
-            "acc_km2": acc_km2,
-        }
+        del dir_out
+        gc.collect()
+        return acc_km2
 
     raise ValueError(f"Unsupported flow_method: {flow_method}")
 
@@ -409,7 +408,10 @@ def _run_local(
         out_dtype="float32",
     )
     print("TWI computed.")
-
+    
+    del slope_np
+    gc.collect()
+    
     # ---------------------------------------------------------------------
     # Step 3: Save local rasters
     # ---------------------------------------------------------------------
@@ -423,6 +425,10 @@ def _run_local(
         filename=acc_km2_tif_path,
         band_name="Flow accumulation (km2)",
     )
+
+    del acc_km2
+    gc.collect()
+    
     twi_tif = save_tif(
         twi_arr,
         transform,
@@ -432,6 +438,9 @@ def _run_local(
         band_name="TWI",
     )
 
+    del twi_arr
+    gc.collect()
+    
     # ---------------------------------------------------------------------
     # Step 4: Clip rasters to the target geometry
     # ---------------------------------------------------------------------
@@ -644,7 +653,10 @@ def run_pipeline(
     )
     print("Depression filling completed.")
 
-    dem_res_np, _, _, _, _ = resolve_flats_barnes_2014(
+    del dem_np
+    gc.collect()
+
+    dem_res_np, _, _, _ = resolve_flats_barnes_2014(
         dem_fill_np,
         nodata=np.nan,
         equal_tol=0.0,
@@ -655,18 +667,24 @@ def run_pipeline(
     )
     print("Flat resolution completed.")
 
+    del dem_fill_np
+    gc.collect()
+
     # ---------------------------------------------------------------------
     # Step 4: Compute flow direction and flow accumulation
     # ---------------------------------------------------------------------
-    flow_res = _compute_flow(
+    acc_km2 = _compute_flow(
         dem_np=dem_res_np,
         transform=transform,
         nodata_mask=nodata_mask,
         px_area_np=px_area_np,
         flow_method=flow_method,
     )
-    acc_km2 = flow_res["acc_km2"]
 
+    del dem_res_np
+    del px_area_np
+    gc.collect()
+    
     # ---------------------------------------------------------------------
     # Step 5: Compute slope on the aligned Earth Engine grid
     # ---------------------------------------------------------------------
