@@ -24,7 +24,6 @@ import numpy as np
 
 from scripts.fill_depressions import fill_depressions
 from scripts.flow_accumulation import flow_acc
-from scripts.flow_direction_d8 import flow_dir_d8
 from scripts.flow_direction_mfd import flow_dir_mfd_quinn_1991
 from scripts.geotiff_io import clip_tif, read_tif, save_tif
 from scripts.grid_io import export_dem_grid, ee_to_tif
@@ -99,12 +98,16 @@ def _compute_flow(
     nodata_mask,
     px_area_np,
     flow_method: str,
+    d8_dir_idx=None,
 ) -> dict[str, Any]:
     """
-    Compute flow direction and flow accumulation for the selected routing method.
+    Derive routing outputs and compute flow accumulation for the selected
+    routing method.
 
-    Depending on the selected option, the function runs either D8 or MFD
-    flow routing and then derives flow accumulation in square kilometres.
+    For the MFD branch, flow directions are derived from the DEM after
+    hydrological conditioning. For the D8 branch, precomputed flat-resolved
+    D8 flow directions may be supplied directly and reused without
+    recomputation.
     """
     if flow_method == "mfd_quinn_1991":
         dir_out = flow_dir_mfd_quinn_1991(
@@ -128,12 +131,11 @@ def _compute_flow(
         }
 
     if flow_method == "d8":
-        dir_out = flow_dir_d8(
-            dem_np,
-            transform,
-            nodata_mask=nodata_mask,
-        )
-        print("Flow direction computed.")
+        if d8_dir_idx is None:
+            raise ValueError("Missing precomputed D8 flow directions for flow_method='d8'.")
+
+        dir_out = d8_dir_idx
+        print("Flow direction reused from flat-resolution output.")
 
         acc_km2 = flow_acc(
             dir_idx=dir_out,
@@ -551,7 +553,8 @@ def run_pipeline(
         Perform hydrological conditioning on the DEM in local arrays.
 
     Step 4
-        Compute flow direction and flow accumulation.
+        Derive routing outputs for the selected flow method and compute
+        flow accumulation.
 
     Step 5
         Compute slope on the Earth Engine grid.
@@ -644,13 +647,15 @@ def run_pipeline(
     )
     print("Depression filling completed.")
 
-    dem_res_np, _, _, _, _ = resolve_flats_barnes_2014(
+    apply_to_dem = "epsilon" if flow_method == "mfd_quinn_1991" else "none"
+    
+    dem_res_np, _, _, flowdirs_d8_np, _ = resolve_flats_barnes_2014(
         dem_fill_np,
+        transform,
         nodata=np.nan,
         equal_tol=0.0,
-        lower_tol=0.0,
         treat_oob_as_lower=True,
-        apply_to_dem="epsilon",
+        apply_to_dem=apply_to_dem,
         epsilon=1e-5,
     )
     print("Flat resolution completed.")
@@ -664,6 +669,7 @@ def run_pipeline(
         nodata_mask=nodata_mask,
         px_area_np=px_area_np,
         flow_method=flow_method,
+        d8_dir_idx=flowdirs_d8_np if flow_method == "d8" else None,
     )
     acc_km2 = flow_res["acc_km2"]
 
