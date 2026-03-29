@@ -3,10 +3,11 @@ from __future__ import annotations
 """
 Flat resolution as the second step of DEM hydrological conditioning.
 
-The function `resolve_flats_barnes_2014` resolves drainable flat areas
-in a DEM after depression filling using the flat-resolution procedure
-of Barnes et al. (2014), so that final flow directions can be assigned
-consistently across previously flat surfaces.
+The function `resolve_flats_barnes_2014` resolves drainable flats in a
+DEM after depression filling using the flat-resolution procedure of
+Barnes et al. (2014). The primary output is a DEM in which drainable
+flats can be optionally modified to support subsequent flow-direction
+computation.
 """
 
 from collections import deque
@@ -90,9 +91,12 @@ def resolve_flats_barnes_2014(
         weight to the towards-lower component.
     
     Step 4
-        Assign flow directions within labeled flats by routing each
-        previously unresolved cell to the neighbouring cell with the
-        lowest combined flat-mask value.
+        Use the combined flat mask to establish a consistent internal
+        drainage ordering within labeled flats.
+    
+    Step 5
+        Optionally apply this ordering to the DEM by adding epsilon-scaled
+        increments to drainable flat cells.
     
     Relative to the reference C++/RichDEM implementation, this version
     introduces configurable elevation tolerances, explicit handling of
@@ -131,9 +135,6 @@ def resolve_flats_barnes_2014(
         Integer flat-resolution mask. Cells outside labeled flats are zero.
     labels : np.ndarray
         Flat labels. Cells outside flats are zero.
-    flowdirs : np.ndarray
-        D8 flow directions encoded as 0..7, or special values `NODATA_DIR`
-        and `NOFLOW_DIR`.
     stats : dict
         Diagnostic counters describing identified and resolved flats.
     
@@ -430,8 +431,8 @@ def resolve_flats_barnes_2014(
     # ---------------------------------------------------------------------
     # For each unresolved cell in a labeled drainable flat, assign flow
     # towards the neighbouring cell with the lowest combined flat-mask
-    # value. This converts the auxiliary flat mask into explicit D8 flow
-    # directions within the flat.
+    # value. This establishes a consistent internal drainage pattern
+    # across cells that initially had no local downslope direction.
     for r in range(n_rows):
         for c in range(n_cols):
             if flowdirs[r, c] == NODATA_DIR:
@@ -474,11 +475,12 @@ def resolve_flats_barnes_2014(
                 flowdirs[r, c] = best_dir
 
     # ---------------------------------------------------------------------
-    # Optional DEM modification
+    # Step 5: Optional DEM modification
     # ---------------------------------------------------------------------
-    # By default, the algorithm leaves the DEM unchanged and uses the flat
-    # mask only to assign flow directions. Optionally, the labeled
-    # drainable flats can be incremented according to `flat_mask`.
+    # By default, the algorithm leaves the DEM unchanged after flat
+    # resolution. Optionally, cells belonging to labeled drainable flats
+    # can be incremented according to `flat_mask`, so that the flat
+    # ordering is explicitly reflected in the DEM surface.
     dem_out = dem_values.copy()
     
     if apply_to_dem not in ("none", "epsilon"):
