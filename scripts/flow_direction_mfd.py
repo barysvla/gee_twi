@@ -195,7 +195,7 @@ def flow_dir_mfd_quinn_1991(
     # ---------------------------------------------------------------------
     # Step 0: Validate inputs and define the valid domain
     # ---------------------------------------------------------------------
-    z = np.asarray(dem, dtype=np.float64)
+    z = np.asarray(dem, dtype=np.float32)
     if z.ndim != 2:
         raise ValueError("DEM must be a 2D array.")
 
@@ -247,7 +247,7 @@ def flow_dir_mfd_quinn_1991(
                 d_diag_row[i], dx_row[i], d_diag_row[i], dy_row[i],
                 d_diag_row[i], dx_row[i], d_diag_row[i], dy_row[i],
             ],
-            dtype=np.float64,
+            dtype=np.float32,
         )
 
         for j in range(width):
@@ -255,7 +255,7 @@ def flow_dir_mfd_quinn_1991(
                 continue
 
             zc = z[i, j]
-            weights = np.zeros(8, dtype=np.float64)
+            weights = np.zeros(8, dtype=np.float32)
 
             with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
                 for k, (di, dj) in enumerate(D8_OFFSETS):
