@@ -12,6 +12,7 @@ import numpy as np
 from scripts.fill_depressions import fill_depressions
 from scripts.flow_accumulation import flow_acc
 from scripts.flow_direction_mfd import flow_dir_mfd_quinn_1991
+from scripts.flow_direction_d8 import flow_dir_d8
 from scripts.geotiff_io import clip_tif, read_tif, save_tif
 from scripts.grid_io import export_dem_grid, ee_to_tif
 from scripts.numpy_to_ee import np_to_ee
