@@ -640,24 +640,36 @@ def run_pipeline(
     # ---------------------------------------------------------------------
     # Step 3: Perform hydrological conditioning
     # ---------------------------------------------------------------------
-    dem_fill_np = fill_depressions(
-        dem_np,
-        seed_internal_nodata_as_outlet=True,
-        return_fill_depth=False,
-    )
-    print("Depression filling completed.")
-
-    apply_to_dem = "epsilon" if flow_method == "mfd_quinn_1991" else "none"
+    # Flat resolution is applied in both branches, but the required outputs differ:
+    # - MFD: only the epsilon-modified DEM is needed for subsequent routing,
+    #   so D8 flow directions computed internally are discarded.
+    # - D8: flat-resolved D8 flow directions are reused directly and must be returned.
+    if flow_method == "mfd_quinn_1991":
+        dem_res_np, _, _, _, _ = resolve_flats_barnes_2014(
+            dem_fill_np,
+            transform,
+            nodata=np.nan,
+            equal_tol=0.0,
+            treat_oob_as_lower=True,
+            apply_to_dem="epsilon",
+            epsilon=1e-5,
+        )
+        flowdirs_d8_np = None
     
-    dem_res_np, _, _, flowdirs_d8_np, _ = resolve_flats_barnes_2014(
-        dem_fill_np,
-        transform,
-        nodata=np.nan,
-        equal_tol=0.0,
-        treat_oob_as_lower=True,
-        apply_to_dem=apply_to_dem,
-        epsilon=1e-5,
-    )
+    elif flow_method == "d8":
+        dem_res_np, _, _, flowdirs_d8_np, _ = resolve_flats_barnes_2014(
+            dem_fill_np,
+            transform,
+            nodata=np.nan,
+            equal_tol=0.0,
+            treat_oob_as_lower=True,
+            apply_to_dem="none",
+            epsilon=1e-5,
+        )
+    
+    else:
+        raise ValueError(f"Unsupported flow_method: {flow_method}")
+    
     print("Flat resolution completed.")
 
     # ---------------------------------------------------------------------
