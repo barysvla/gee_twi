@@ -195,7 +195,7 @@ def flow_dir_mfd_quinn_1991(
     # ---------------------------------------------------------------------
     # Step 0: Validate inputs and define the valid domain
     # ---------------------------------------------------------------------
-    z = np.asarray(dem, dtype=np.float32)
+    z = np.asarray(dem, dtype=np.float64)
     if z.ndim != 2:
         raise ValueError("DEM must be a 2D array.")
 
