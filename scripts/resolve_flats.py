@@ -184,20 +184,6 @@ def resolve_flats_barnes_2014(
         out_dtype=np.int16,
     )
 
-    # Optionally treat raster-edge cells without an in-bounds downslope
-    # neighbour as draining outward across the DEM boundary.
-    # if treat_oob_as_lower:
-    #     for r in range(n_rows):
-    #         for c in range(n_cols):
-    #             if not valid[r, c]:
-    #                 continue
-    #             if not is_edge_cell(r, c):
-    #                 continue
-    #             if flowdirs[r, c] != NOFLOW_DIR:
-    #                 continue
-
-    #             flowdirs[r, c] = 0
-
     # ---------------------------------------------------------------------
     # Step 1: Identify flat boundary cells
     # ---------------------------------------------------------------------
