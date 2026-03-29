@@ -527,7 +527,7 @@ def run_pipeline(
     del dem_np
     gc.collect()
 
-   t0 = time.perf_counter()
+    t0 = time.perf_counter()
     dem_res_np, _, _, _ = resolve_flats_barnes_2014(
         dem_fill_np,
         nodata=np.nan,
