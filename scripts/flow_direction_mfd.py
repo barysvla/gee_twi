@@ -38,18 +38,28 @@ def meters_per_degree_lat_lon(
     m_per_deg_lon : np.ndarray
         Metres per degree of longitude.
     """
+    # WGS84 ellipsoid parameters:
+    # a = semi-major axis, f = flattening, e2 = first eccentricity squared
     a = 6378137.0
     f = 1.0 / 298.257223563
     e2 = (2.0 - f) * f
 
+    # Convert latitude to radians and compute trigonometric terms.
     lat = np.deg2rad(np.asarray(lat_deg, dtype=np.float64))
     s = np.sin(lat)
     c = np.cos(lat)
 
+    # Compute radii of curvature:
+    # m = meridional radius of curvature (north-south direction)
+    # n = prime-vertical radius of curvature (east-west direction)
     one_minus_e2s2 = 1.0 - e2 * s * s
     m = a * (1.0 - e2) / (one_minus_e2s2 ** 1.5)
     n = a / np.sqrt(one_minus_e2s2)
 
+    # Convert curvature radii to linear distance per one degree.
+    # The longitudinal distance additionally scales with cos(latitude),
+    # reflecting the convergence of meridians toward the poles.
+    # Cosine is clipped to non-negative values to avoid numerical artefacts.
     m_per_deg_lat = (np.pi / 180.0) * m
     m_per_deg_lon = (np.pi / 180.0) * n * np.clip(c, 0.0, None)
 
@@ -63,9 +73,10 @@ def step_lengths_for_rows_epsg4326(
     """
     Compute per-row D8 step lengths for a north-up raster in EPSG:4326.
 
-    The step lengths are evaluated at row-centre latitudes and expressed
-    in metres. East-west, north-south, and diagonal distances are
-    returned separately.
+    Because the metric length of one degree of longitude varies with
+    latitude, step lengths are evaluated separately for each raster row
+    using row-centre latitudes. East-west, north-south, and diagonal
+    distances are returned in metres.
 
     Parameters
     ----------
@@ -84,15 +95,20 @@ def step_lengths_for_rows_epsg4326(
     d_diag : np.ndarray
         Diagonal step length in metres for each row.
     """
+    # Pixel size in geographic units (degrees).
     deg_x = float(abs(transform.a))
     deg_y = float(abs(transform.e))
 
+    # Compute row-centre latitudes from the affine transform so that
+    # metric step lengths can be evaluated separately for each raster row.
     lat_origin = float(transform.f)
     lat_step = float(transform.e)
-
     lat_centres_deg = lat_origin + lat_step * (np.arange(height, dtype=np.float64) + 0.5)
 
+    # Convert one degree of latitude/longitude to metres at each row centre.
     mlat, mlon = meters_per_degree_lat_lon(lat_centres_deg)
+
+    # Compute east-west, north-south, and diagonal step lengths in metres.
     dx = mlon * deg_x
     dy = mlat * deg_y
     d_diag = np.hypot(dx, dy)
@@ -121,9 +137,9 @@ def flow_dir_mfd_quinn_1991(
     """
     Compute multi-flow routing weights following Quinn et al. (1991).
 
-    This function computes multi-flow direction (MFD) routing weights in
-    an FD8-style neighbourhood. For each cell, positive slopes to all
-    downslope neighbours are evaluated and converted to routing weights
+    This function computes multi-flow direction (MFD) routing weights in an
+    8-neighbourhood. For each cell, positive slopes to all downslope
+    neighbours are evaluated and converted to routing weights
 
         w_k ∝ L_k * tan(beta_k)
 
@@ -143,8 +159,7 @@ def flow_dir_mfd_quinn_1991(
         rasters or as constant values for projected rasters.
 
     Step 2
-        Define the effective contour-length factors for the FD8-style
-        neighbourhood.
+        Define the effective contour-length factors for the 8-neighbourhood.
 
     Step 3
         For each valid cell, evaluate all valid downslope neighbours and
@@ -155,7 +170,7 @@ def flow_dir_mfd_quinn_1991(
         at least one downslope neighbour.
 
     Step 5
-        Assign zero weights to NoData cells and return the output array.
+        Finalize the output array by assigning zero weights to NoData cells.
 
     Parameters
     ----------
@@ -193,7 +208,7 @@ def flow_dir_mfd_quinn_1991(
     Hydrological Processes, 5(1), 59–79.
     """
     # ---------------------------------------------------------------------
-    # Step 0: Validate inputs and define the valid domain
+    # Step 0: Validate inputs, normalize the DEM, and define the valid domain
     # ---------------------------------------------------------------------
     z = np.asarray(dem, dtype=np.float64)
     if z.ndim != 2:
@@ -214,6 +229,9 @@ def flow_dir_mfd_quinn_1991(
     # ---------------------------------------------------------------------
     # Step 1: Compute D8 step lengths in metres
     # ---------------------------------------------------------------------
+    # Compute step lengths in metres so that local slopes are evaluated
+    # consistently in metric units, including row-dependent distances for
+    # rasters in geographic coordinates.
     if assume_epsg4326:
         dx_row, dy_row, d_diag_row = step_lengths_for_rows_epsg4326(transform, height)
     else:
@@ -226,6 +244,9 @@ def flow_dir_mfd_quinn_1991(
     # ---------------------------------------------------------------------
     # Step 2: Define effective contour-length factors
     # ---------------------------------------------------------------------
+    # Quinn et al. (1991) weight downslope flow not only by local slope,
+    # but also by an effective contour-length factor reflecting the portion
+    # of the cell boundary through which flow leaves the cell.
     l_cardinal = 0.5
     l_diagonal = np.sqrt(2.0) / 4.0
     contour_length = np.array(
@@ -239,6 +260,8 @@ def flow_dir_mfd_quinn_1991(
     # ---------------------------------------------------------------------
     # Step 3: Evaluate downslope neighbours and compute raw weights
     # ---------------------------------------------------------------------
+    # For each valid cell, evaluate all valid downslope neighbours and
+    # compute unnormalized Quinn-type routing weights.
     flow_weights = np.zeros((height, width, 8), dtype=np.float32)
 
     for i in range(height):
@@ -257,6 +280,8 @@ def flow_dir_mfd_quinn_1991(
             zc = z[i, j]
             weights = np.zeros(8, dtype=np.float32)
 
+            # Suppress floating-point warnings from rare invalid or degenerate
+            # cases; such candidates are filtered out explicitly below.
             with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
                 for k, (di, dj) in enumerate(D8_OFFSETS):
                     ni, nj = i + di, j + dj
@@ -283,15 +308,19 @@ def flow_dir_mfd_quinn_1991(
                         weights[k] = wk
 
             # -----------------------------------------------------------------
-            # Step 4: Normalize routing weights
+            # Step 4: Normalize routing weights for the current cell
             # -----------------------------------------------------------------
+            # Convert raw Quinn-type weights to relative proportions so that
+            # the total outflow from the cell is conserved (sum = 1).
             weight_sum = float(weights.sum())
             if weight_sum > 0.0:
                 flow_weights[i, j, :] = (weights / weight_sum).astype(np.float32)
 
     # ---------------------------------------------------------------------
-    # Step 5: Assign zero weights to NoData cells
+    # Step 5: Finalize output and enforce NoData convention
     # ---------------------------------------------------------------------
+    # Ensure that NoData cells contain only zero weights so they do not
+    # contribute to flow accumulation or further processing.
     flow_weights[nodata, :] = 0.0
 
     return flow_weights
