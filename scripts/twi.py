@@ -5,9 +5,14 @@ Topographic Wetness Index computation for the final workflow output.
 
 This script computes the Topographic Wetness Index (TWI) from flow
 accumulation and slope rasters on a shared grid. It represents the final
-analytical step of the workflow and provides both an Earth Engine-based
-implementation and a NumPy-based implementation for cloud and local
-processing modes.
+analytical step of the workflow.
+
+The functions provided are:
+    - twi_ee: computes TWI for Earth Engine images (server-side evaluation)
+    - twi_np: computes TWI for NumPy arrays (local evaluation)
+
+These functions enable consistent TWI computation in both cloud-based
+(GEE) and local (NumPy) processing modes.
 """
 
 from typing import Optional
