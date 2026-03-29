@@ -3,10 +3,17 @@ from __future__ import annotations
 """
 Utilities for transferring raster data from NumPy to Earth Engine.
 
-This script provides functions for exporting NumPy arrays to Cloud
-Optimized GeoTIFF, uploading them to Google Cloud Storage, and loading
-them into Earth Engine. It is used to integrate locally computed raster
-outputs into the Earth Engine workflow.
+This script implements the data transfer bridge between the local
+(NumPy-based) workflow and Earth Engine. It converts raster arrays
+to Cloud Optimized GeoTIFF, uploads them to Google Cloud Storage,
+and loads them into Earth Engine as image objects.
+
+The main function is:
+    - np_to_ee: performs the full transfer pipeline from a NumPy array
+      to an Earth Engine image
+
+Supporting internal functions handle GeoTIFF serialization and
+Google Cloud Storage bucket management.
 """
 
 import os
@@ -32,13 +39,12 @@ def _get_or_create_bucket(
     """
     Return an existing GCS bucket or create it if it does not exist.
 
-    The function ensures that the bucket is accessible and located in a
-    region compatible with the Earth Engine GeoTIFF loading workflow.
-    If the bucket does not exist, it is created with the specified
-    location and storage class.
+    This internal function ensures that the bucket is accessible and located
+    in a region accepted by the Earth Engine GeoTIFF loading workflow. If
+    the bucket does not exist, it is created with the requested location and
+    storage class.
 
-    Only a restricted set of locations is accepted in this workflow:
-    'US' or 'US-CENTRAL1'.
+    Only bucket locations US and US-CENTRAL1 are accepted in this workflow.
 
     Parameters
     ----------
@@ -61,16 +67,16 @@ def _get_or_create_bucket(
     bucket_name = bucket_name.lower().strip()
 
     try:
-        # Try to fetch existing bucket
+        # Try to retrieve an existing bucket first.
         bucket = storage_client.get_bucket(bucket_name)
         bucket.reload()
 
     except NotFound:
-        # Bucket does not exist → create it
+        # If the bucket does not exist, create it with the requested settings.
         bucket = storage_client.bucket(bucket_name)
         bucket.storage_class = storage_class
 
-        # Enable uniform bucket-level access (recommended for EE access)
+        # Enable uniform bucket-level access (recommended for EE access).
         try:
             bucket.iam_configuration.uniform_bucket_level_access_enabled = True
         except Exception:
@@ -84,7 +90,7 @@ def _get_or_create_bucket(
         bucket.reload()
 
     except Conflict:
-        # Rare race condition: bucket was created between calls
+        # Rare race condition: the bucket was created between calls.
         bucket = storage_client.get_bucket(bucket_name)
         bucket.reload()
 
@@ -99,7 +105,7 @@ def _get_or_create_bucket(
             f"Bad request when accessing or creating bucket '{bucket_name}': {exc}"
         ) from exc
 
-    # Validate bucket location (EE constraint)
+    # Validate bucket location against the locations accepted by this workflow.
     loc = (bucket.location or "").upper().strip()
     if loc not in {"US", "US-CENTRAL1"}:
         raise RuntimeError(
@@ -108,6 +114,7 @@ def _get_or_create_bucket(
         )
 
     return bucket
+
 
 def _write_cog_local(
     arr_f32: np.ndarray,
@@ -120,11 +127,13 @@ def _write_cog_local(
     compress: str = "LZW",
 ) -> None:
     """
-    Write a single-band Cloud Optimized GeoTIFF to local storage.
-
-    This function writes a single-band raster as a Cloud Optimized
-    GeoTIFF (COG) using rasterio.
-
+    Write a single-band Cloud Optimized GeoTIFF (COG) to local storage.
+    
+    This internal function serializes a two-dimensional float32 NumPy array
+    to a Cloud Optimized GeoTIFF using a consistent tiling, compression,
+    and NoData configuration. The output file is intended for subsequent
+    upload to Google Cloud Storage and ingestion into Earth Engine.
+    
     Parameters
     ----------
     arr_f32 : np.ndarray
@@ -136,12 +145,12 @@ def _write_cog_local(
     out_path : str
         Output file path.
     nodata_value : float
-        Numeric NoData value written to the GeoTIFF.
+        Finite numeric NoData value written to the GeoTIFF.
     blocksize : int, default=512
-        Internal block size used by the COG writer.
+        Internal tile size used for COG layout.
     compress : str, default="LZW"
         Compression method used for the GeoTIFF.
-
+    
     Returns
     -------
     None
@@ -153,6 +162,8 @@ def _write_cog_local(
     if not np.isfinite(nodata_value):
         raise ValueError("nodata_value must be finite.")
 
+    # Define the Cloud Optimized GeoTIFF profile with tiling, compression,
+    # and internal overviews for efficient access.
     profile = {
         "driver": "COG",
         "height": int(arr_f32.shape[0]),
@@ -187,7 +198,8 @@ def np_to_ee(
     cleanup_local: bool = False,
 ) -> Dict[str, Any]:
     """
-    Write a NumPy array to a local GeoTIFF, upload it to GCS, and load it into Earth Engine.
+    Write a two-dimensional NumPy array to a local GeoTIFF, upload it to
+    Google Cloud Storage, and load it into Earth Engine as a single-band image.
 
     This function converts a two-dimensional NumPy array to a local
     Cloud Optimized GeoTIFF, uploads the file to Google Cloud Storage,
@@ -205,7 +217,7 @@ def np_to_ee(
         Convert the array to float32 and materialize NoData values.
 
     Step 3
-        Prepare the local output directory and file path.
+        Prepare output naming and local storage.
 
     Step 4
         Write the local Cloud Optimized GeoTIFF.
@@ -266,6 +278,8 @@ def np_to_ee(
     # ---------------------------------------------------------------------
     # Step 0: Validate input array and normalize NoData value
     # ---------------------------------------------------------------------
+    # Ensure that the GeoTIFF NoData value is finite, since it must be
+    # materialized explicitly in the raster before upload.
     if not np.isfinite(nodata_value):
         nodata_value = -9999.0
 
@@ -276,6 +290,7 @@ def np_to_ee(
     # ---------------------------------------------------------------------
     # Step 1: Construct the effective NoData mask
     # ---------------------------------------------------------------------
+    # Define the cells that will be exported as NoData in the GeoTIFF.
     if nodata_mask is None:
         mask = ~np.isfinite(arr)
     else:
@@ -286,19 +301,22 @@ def np_to_ee(
     # ---------------------------------------------------------------------
     # Step 2: Convert to float32 and materialize NoData values
     # ---------------------------------------------------------------------
+    # Convert the array to float32 for stable GeoTIFF export and Earth Engine loading.
     arr_f32 = arr.astype(np.float32, copy=False)
 
     if mask.any():
         arr_f32 = arr_f32.copy()
         arr_f32[mask] = float(nodata_value)
     elif np.isnan(arr_f32).any():
+        # Even without an explicit mask, replace remaining NaN values so that
+        # NoData is represented by the chosen numeric sentinel in the file.
         arr_f32 = np.where(np.isnan(arr_f32), nodata_value, arr_f32).astype(
             np.float32,
             copy=False,
         )
 
     # ---------------------------------------------------------------------
-    # Step 3: Prepare the local output directory and file path
+    # Step 3: Prepare output naming and local storage
     # ---------------------------------------------------------------------
     object_prefix = object_prefix.strip().strip("/")
     safe_band = band_name.strip() or "band"
@@ -319,6 +337,7 @@ def np_to_ee(
         # -----------------------------------------------------------------
         # Step 4: Write the local Cloud Optimized GeoTIFF
         # -----------------------------------------------------------------
+        # Write the array as a local Cloud Optimized GeoTIFF prior to upload.
         _write_cog_local(
             arr_f32,
             transform=transform,
@@ -330,7 +349,7 @@ def np_to_ee(
         )
 
         # -----------------------------------------------------------------
-        # Step 5: Upload the GeoTIFF to Google Cloud Storage
+        # Step 5: Retrieve or create the target bucket and upload the object
         # -----------------------------------------------------------------
         storage_client = storage.Client(project=project_id)
         bucket = _get_or_create_bucket(
@@ -349,6 +368,8 @@ def np_to_ee(
         # -----------------------------------------------------------------
         # Step 6: Load the uploaded GeoTIFF into Earth Engine
         # -----------------------------------------------------------------
+        # Load the uploaded GeoTIFF into Earth Engine as a float image and
+        # assign the requested band name.
         ee_img = ee.Image.loadGeoTIFF(gs_uri).rename(safe_band).toFloat()
 
         return {
