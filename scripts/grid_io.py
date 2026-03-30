@@ -67,23 +67,57 @@ def export_dem_grid(
     quiet: bool = True,
 ) -> Dict[str, Any]:
     """
-    Export a DEM and a matching pixel-area raster to aligned NumPy arrays.
-
-    The function normalizes the DEM source to a single Earth Engine image,
+    Export a DEM and a matching pixel-area raster from Earth Engine to aligned NumPy arrays.
+    
+    This function implements the transition from Earth Engine to the local
+    (NumPy-based) workflow. It converts a DEM source to a single image,
     derives a stable reference projection, optionally aligns the export
     region to the DEM grid, constructs grid-locked DEM and pixel-area
-    images, exports both rasters to GeoTIFF, and reads them back as
-    aligned arrays.
+    images, exports both rasters to GeoTIFF, and loads them into aligned
+    NumPy arrays.
 
-    Export uses `ee_to_tif()`, which first attempts a standard direct
-    download and automatically switches to tiled export only when the
-    direct request exceeds the HTTP response-size limit.
-
+    The pixel-area raster is exported on the same grid as the DEM and is
+    used to convert flow accumulation to physical units (m² or km²), which
+    is required because pixel area varies in geographic coordinate systems
+    such as WGS84.
+    
+    Export uses `ee_to_tif()`, which first attempts a direct download and
+    automatically switches to tiled export when the request exceeds the
+    HTTP response-size limit.
+    
+    The procedure consists of the following steps:
+    
+    Step 0
+        Normalize the DEM source to a single Earth Engine image and derive
+        a reference projection.
+    
+    Step 1
+        Optionally align the export region to the DEM grid.
+    
+    Step 2
+        Build a reusable export-grid definition.
+    
+    Step 3
+        Apply the requested DEM resampling method.
+    
+    Step 4
+        Reproject DEM and pixel-area rasters to a shared grid.
+    
+    Step 5
+        Export both rasters to GeoTIFF.
+    
+    Step 6
+        Load exported GeoTIFF rasters into NumPy arrays and verify alignment.
+    
+    Step 7
+        Normalize NoData values and assemble output structures.
+    
     Parameters
     ----------
     src : ee.Image or ee.ImageCollection or str
         DEM source. A string is interpreted as an Earth Engine image
-        collection identifier.
+        collection identifier. If a collection is provided, it is filtered
+        to the region and mosaicked.
     region_geom : ee.Geometry
         Region to export.
     band : str, optional
@@ -104,7 +138,7 @@ def export_dem_grid(
     quiet : bool, default=True
         If True, suppress verbose logging from geemap and Google client
         libraries during export.
-
+    
     Returns
     -------
     result : dict
@@ -121,15 +155,22 @@ def export_dem_grid(
             - "paths"
             - "export_info"
     """
+    # Preserve original logger levels so they can be restored afterward.
     previous_levels: dict[str, int] = {}
     if quiet:
+        # Temporarily suppress verbose logging from Google and geemap
+        # during export.
         for name in ("google", "googleapiclient", "geemap"):
             logger = logging.getLogger(name)
             previous_levels[name] = logger.level
             logger.setLevel(logging.ERROR)
-
+    
     try:
-        # Normalize the source to a single DEM image and derive its projection.
+        # -----------------------------------------------------------------
+        # Step 0: Normalize DEM source and derive reference projection
+        # -----------------------------------------------------------------
+        # Convert the input source to a single DEM image and use its
+        # projection as the stable grid reference for export.
         if isinstance(src, ee.image.Image):
             dem_image = src if band is None else src.select([band])
             reference_image = dem_image
@@ -137,37 +178,49 @@ def export_dem_grid(
             dem_collection = ee.ImageCollection(src) if isinstance(src, str) else src
             if band is not None:
                 dem_collection = dem_collection.select([band])
-
+    
             reference_image = dem_collection.first()
             dem_image = dem_collection.filterBounds(region_geom).mosaic()
-
+    
         proj = ee.Image(reference_image).projection()
         dem_image = ee.Image(dem_image).setDefaultProjection(proj)
-
-        # Align the region to the DEM grid when requested.
+    
+        # -----------------------------------------------------------------
+        # Step 1: Optionally align the region to the DEM grid
+        # -----------------------------------------------------------------
+        # Snap the export region to the DEM grid so that exported rasters
+        # match the source grid boundaries exactly.
         if snap_region_to_grid:
             mask = ee.Image.constant(1).reproject(proj).clip(region_geom).selfMask()
             aligned_geometry = mask.geometry().transform(proj=proj, maxError=1)
             region_aligned = aligned_geometry.bounds(maxError=1, proj=proj)
         else:
             region_aligned = region_geom
-
-        # Build the reusable export-grid definition.
+    
+        # -----------------------------------------------------------------
+        # Step 2: Build the reusable export-grid definition
+        # -----------------------------------------------------------------
+        # Extract the projection definition needed to reproduce the DEM grid
+        # consistently during both DEM and pixel-area export.
         proj_info = proj.getInfo()
         crs = proj_info["crs"]
         crs_transform = proj_info.get("transform", None)
-
+    
         scale_m: Optional[float] = None
         if crs_transform is None:
             scale_m = float(ee.Image(dem_image).projection().nominalScale().getInfo())
-
+    
         export_grid: dict[str, Any] = {
             "projection_info": {"crs": crs, "transform": crs_transform},
             "region_used": region_aligned,
             "scale_m": scale_m,
         }
-
-        # Apply the requested DEM resampling method.
+    
+        # -----------------------------------------------------------------
+        # Step 3: Apply DEM resampling method
+        # -----------------------------------------------------------------
+        # Resample the DEM before reprojection so that export uses the
+        # requested interpolation method.
         resample_method_norm = (resample_method or "").lower()
         if resample_method_norm in ("bilinear", "bicubic"):
             dem_resampled = ee.Image(dem_image).resample(resample_method_norm)
@@ -178,8 +231,12 @@ def export_dem_grid(
                 f"Invalid resample_method: {resample_method}. "
                 "Use 'nearest', 'bilinear', or 'bicubic'."
             )
-
-        # Reproject DEM and pixel-area rasters to the shared grid.
+    
+        # -----------------------------------------------------------------
+        # Step 4: Reproject DEM and pixel-area rasters to the shared grid
+        # -----------------------------------------------------------------
+        # Construct grid-locked DEM and pixel-area images so that both
+        # exported rasters are perfectly aligned.
         if crs_transform is not None:
             ee_dem_grid = (
                 ee.Image(dem_resampled)
@@ -211,12 +268,19 @@ def export_dem_grid(
                 .clip(region_aligned)
             )
 
+        # Create a temporary local directory for exported rasters
+        # if none was supplied.
         if tmp_dir is None:
             tmp_dir = tempfile.mkdtemp()
-
+    
         dem_path = os.path.join(tmp_dir, dem_filename)
         pixel_area_path = os.path.join(tmp_dir, px_filename)
-
+    
+        # -----------------------------------------------------------------
+        # Step 5: Export DEM and pixel-area rasters to GeoTIFF
+        # -----------------------------------------------------------------
+        # Export the DEM with explicit NoData materialization and the
+        # pixel-area raster on the same grid so both outputs remain aligned.
         dem_export_info = ee_to_tif(
             img=ee_dem_grid.unmask(nodata_value),
             out_path=dem_path,
@@ -233,14 +297,16 @@ def export_dem_grid(
             tile_prefix="px_tile",
             tmp_dir=os.path.join(tmp_dir, "px_tiles"),
         )
-
-        # Read outputs back and verify alignment.
+    
+        # -----------------------------------------------------------------
+        # Step 6: Load exported GeoTIFF rasters into NumPy arrays and verify alignment
+        # -----------------------------------------------------------------
         with rasterio.open(dem_path) as src_dem:
             dem_raw_data = src_dem.read(1).astype(np.float64)
             transform = src_dem.transform
             out_crs = src_dem.crs
             nd_src = src_dem.nodata
-
+    
         with rasterio.open(pixel_area_path) as src_px:
             pixel_area_data = src_px.read(1).astype(np.float64)
             if (
@@ -253,13 +319,18 @@ def export_dem_grid(
                     "pixel_area is not aligned with DEM "
                     "(transform, CRS, or shape mismatch)."
                 )
-
+    
+        # -----------------------------------------------------------------
+        # Step 7: Normalize NoData and assemble outputs
+        # -----------------------------------------------------------------
+        # Convert exported DEM NoData values to NaN and keep the original
+        # boolean mask for subsequent local processing.
         nodata_value_raw = nd_src if nd_src is not None else float(nodata_value)
         nodata_mask = (dem_raw_data == nodata_value_raw) | ~np.isfinite(dem_raw_data)
-
+    
         dem_elevations = dem_raw_data.copy()
         dem_elevations[nodata_mask] = np.nan
-
+    
         return {
             "dem_elevations_np": dem_elevations,
             "pixel_area_m2_np": pixel_area_data,
@@ -267,7 +338,10 @@ def export_dem_grid(
             "crs": out_crs,
             "nodata_mask": nodata_mask,
             "nodata_value_raw": nodata_value_raw,
-            "projection_info": {"crs": crs, "transform": crs_transform},
+            "projection_info": {
+                "crs": crs,
+                "transform": crs_transform,
+            },
             "scale_m": scale_m,
             "region_used": region_aligned,
             "ee_dem_grid": ee_dem_grid,
@@ -282,9 +356,10 @@ def export_dem_grid(
             },
             "tmp_dir": tmp_dir,
         }
-
+    
     finally:
         if quiet:
+            # Restore original logger levels after export completes.
             for name, level in previous_levels.items():
                 logging.getLogger(name).setLevel(level)
 
