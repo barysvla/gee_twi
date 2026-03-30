@@ -1,23 +1,22 @@
 from __future__ import annotations
 
 """
-Utilities for exporting grid-aligned rasters from Earth Engine.
+Utilities for exporting grid-aligned rasters from Earth Engine to local storage.
 
-This module prepares a shared raster grid for the workflow and exports
-Earth Engine images to local GeoTIFF files aligned to that grid.
-Direct HTTP export is attempted first. If the request exceeds the
-download-size limit, the export automatically falls back to tiled
-download, local tile normalization, and raster assembly.
+This module implements the Earth Engine to local export bridge used in
+the workflow. It prepares shared raster grids, exports Earth Engine
+images to grid-aligned GeoTIFF files, and supports automatic fallback
+from direct download to tiled export when the Earth Engine response-size
+limit is exceeded.
 
-Public functions
-----------------
-export_dem_grid
-    Build a grid-locked DEM and pixel-area raster and load them as
-    aligned NumPy arrays.
+The main public functions are:
+    - export_dem_grid: export a DEM and a matching pixel-area raster to
+      aligned NumPy arrays
+    - ee_to_tif: export a single Earth Engine image to a grid-aligned
+      GeoTIFF with automatic fallback to tiled export
 
-ee_to_tif
-    Export a single Earth Engine image to a GeoTIFF aligned to a
-    predefined grid, with automatic fallback to tiled export when needed.
+Supporting internal functions handle direct export, tiled export,
+tile-grid planning, raster-window conversion, and raster assembly.
 """
 
 import contextlib
@@ -581,7 +580,7 @@ def ee_to_tif(
             n_cols, n_rows = _refine_tile_grid(n_cols, n_rows, mode=_TILE_REFINE_MODE)
 
     # ---------------------------------------------------------------------
-    # Step 6: Raise a final error if all export attempts failed
+    # Step 6: Return diagnostics or raise a final export error
     # ---------------------------------------------------------------------
     error_lines = ["Automatic EE export failed.", ""]
 
@@ -984,7 +983,33 @@ def _grid_transform_and_shape(grid: dict[str, Any]) -> tuple[rasterio.Affine, in
 
 
 def _split_windows(width: int, height: int, n_cols: int, n_rows: int) -> list[dict[str, Any]]:
-    """Split a raster shape into a regular grid of raster windows."""
+    """
+    Split a raster extent into a regular grid of rasterio windows.
+    
+    The function divides a raster of given width and height into a grid
+    of `n_cols × n_rows` windows using integer boundaries derived from
+    linspace. Edge tiles may differ slightly in size due to integer rounding.
+    
+    Parameters
+    ----------
+    width : int
+        Raster width in pixels.
+    height : int
+        Raster height in pixels.
+    n_cols : int
+        Number of tile columns.
+    n_rows : int
+        Number of tile rows.
+    
+    Returns
+    -------
+    list of dict
+        List of window descriptors. Each item contains:
+            - "index": linear tile index
+            - "row_idx", "col_idx": grid position
+            - "window": rasterio.windows.Window instance
+    """
+    # Compute integer grid edges along both axes.
     col_edges = np.linspace(0, width, n_cols + 1, dtype=int)
     row_edges = np.linspace(0, height, n_rows + 1, dtype=int)
 
@@ -1018,18 +1043,36 @@ def _split_windows(width: int, height: int, n_cols: int, n_rows: int) -> list[di
 
 def _window_to_region(window: Window, transform: rasterio.Affine) -> ee.Geometry:
     """
-    Convert a raster window to an EE rectangle.
-
-    The rectangle is slightly shrunken inward to reduce the chance that
-    Earth Engine returns an extra boundary pixel. Exact final placement
-    is enforced later by cropping each downloaded tile to the expected
-    raster window.
+    Convert a rasterio window to an Earth Engine rectangular geometry.
+    
+    The function transforms a raster window (defined in pixel coordinates)
+    to spatial coordinates using the provided affine transform and returns
+    an `ee.Geometry.Rectangle`.
+    
+    The resulting rectangle is slightly shrunk inward by a small fraction
+    of pixel size to avoid inclusion of extra boundary pixels during
+    Earth Engine export. Final alignment is enforced later by cropping
+    each downloaded tile to the expected raster window.
+    
+    Parameters
+    ----------
+    window : rasterio.windows.Window
+        Raster window in pixel coordinates.
+    transform : rasterio.Affine
+        Affine transform defining the raster grid.
+    
+    Returns
+    -------
+    ee.Geometry
+        Earth Engine rectangle corresponding to the window extent.
     """
+    # Convert pixel window to spatial bounds.
     left, bottom, right, top = rasterio.windows.bounds(window, transform)
 
     px_w = abs(transform.a)
     px_h = abs(transform.e)
 
+    # Small inward offset relative to pixel size.
     eps_x = px_w * 1e-6
     eps_y = px_h * 1e-6
 
@@ -1056,9 +1099,70 @@ def _export_ee_tiled(
     quiet: bool = True,
 ) -> Dict[str, Any]:
     """
-    Export an image by tiles, normalize each tile to the expected raster
-    window, and assemble the final GeoTIFF locally.
+    Export an Earth Engine image by tiles and assemble the final raster locally.
+
+    This internal function divides the target raster extent into a regular
+    grid of windows, exports each tile separately using the standard
+    single-request exporter, normalizes tile dimensions to the expected
+    raster windows, and assembles the final GeoTIFF on local storage.
+
+    The procedure consists of the following steps:
+
+    Step 0
+        Prepare the temporary tile directory and split the target raster
+        into windows.
+
+    Step 1
+        Export each tile using a window-specific grid definition.
+
+    Step 2
+        Normalize each downloaded tile to the expected raster window.
+
+    Step 3
+        Assemble the exported tiles into the full output raster.
+
+    Step 4
+        Validate complete raster coverage.
+
+    Step 5
+        Write the assembled raster to the final GeoTIFF.
+
+    Parameters
+    ----------
+    img : ee.Image
+        Earth Engine image to export.
+    out_path : str
+        Output GeoTIFF path.
+    grid : dict
+        Grid definition containing projection metadata and export region.
+    full_transform : rasterio.Affine
+        Affine transform of the full output raster.
+    full_width : int
+        Full raster width in pixels.
+    full_height : int
+        Full raster height in pixels.
+    n_cols : int
+        Number of tile columns.
+    n_rows : int
+        Number of tile rows.
+    tmp_dir : str
+        Directory used for temporary tile outputs.
+    tile_prefix : str
+        Prefix used for temporary tile filenames.
+    unmask_value : float, optional
+        Value used in `img.unmask(unmask_value)` before export.
+    quiet : bool, default=True
+        If True, suppress verbose logging during per-tile export.
+
+    Returns
+    -------
+    dict
+        Dictionary describing the tiled export result, including output
+        path, tile paths, and tile-grid configuration.
     """
+    # ---------------------------------------------------------------------
+    # Step 0: Prepare temporary storage and split the raster into windows
+    # ---------------------------------------------------------------------
     os.makedirs(tmp_dir, exist_ok=True)
     windows = _split_windows(full_width, full_height, n_cols=n_cols, n_rows=n_rows)
 
@@ -1067,6 +1171,9 @@ def _export_ee_tiled(
     covered = np.zeros((full_height, full_width), dtype=bool)
     tile_paths: list[str] = []
 
+    # ---------------------------------------------------------------------
+    # Step 1-3: Export tiles, normalize them, and assemble the raster
+    # ---------------------------------------------------------------------
     for tile in windows:
         idx = tile["index"]
         window = tile["window"]
@@ -1074,6 +1181,7 @@ def _export_ee_tiled(
         exp_h = int(window.height)
         exp_w = int(window.width)
 
+        # Build a tile-specific grid definition matching the current raster window.
         tile_grid = {
             "projection_info": grid["projection_info"],
             "region_used": _window_to_region(window, full_transform),
@@ -1082,6 +1190,7 @@ def _export_ee_tiled(
 
         tile_path = os.path.join(tmp_dir, f"{tile_prefix}_{idx}.tif")
 
+        # Export the current tile using the standard single-request exporter.
         _ee_to_tif_standard(
             img=img,
             out_path=tile_path,
@@ -1105,6 +1214,7 @@ def _export_ee_tiled(
                 f"{(exp_h, exp_w)}. Actual cropped shape: {arr.shape}."
             )
 
+        # Allocate the full output raster after the first tile determines dtype.
         if assembled is None:
             assembled = np.empty((full_height, full_width), dtype=arr.dtype)
 
@@ -1113,15 +1223,22 @@ def _export_ee_tiled(
         col0 = int(window.col_off)
         col1 = col0 + exp_w
 
+        # Insert the normalized tile into its expected position in the output raster.
         assembled[row0:row1, col0:col1] = arr
         covered[row0:row1, col0:col1] = True
         tile_paths.append(tile_path)
 
+    # ---------------------------------------------------------------------
+    # Step 4: Validate assembled raster coverage
+    # ---------------------------------------------------------------------
     if assembled is None or profile is None:
         raise RuntimeError("Tiled export failed before any tile was assembled.")
     if not np.all(covered):
         raise RuntimeError("Tiled export did not cover the full output raster.")
 
+    # ---------------------------------------------------------------------
+    # Step 5: Write the assembled raster to GeoTIFF
+    # ---------------------------------------------------------------------
     out_dir = os.path.dirname(out_path)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
