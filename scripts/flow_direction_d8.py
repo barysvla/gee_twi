@@ -3,10 +3,14 @@ from __future__ import annotations
 """
 D8 flow-direction computation for DEM-based flow routing.
 
-This script computes D8 flow directions in a raster DEM by assigning
-each valid cell to the neighbouring cell with the maximum downslope
-gradient. It is intended for use after hydrological conditioning as
-input for subsequent flow-accumulation calculation.
+The function `flow_dir_d8` computes D8 flow directions in a raster DEM
+by assigning each valid cell to the neighbouring cell with the maximum
+downslope gradient. It is intended for use after hydrological
+conditioning as input for subsequent flow-accumulation calculation.
+
+The method follows the concept introduced by O'Callaghan and Mark (1984),
+where flow is routed from each cell to a single downslope neighbour,
+forming a directed drainage network over the raster.
 """
 
 from typing import Tuple
