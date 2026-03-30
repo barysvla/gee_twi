@@ -3,15 +3,16 @@ from __future__ import annotations
 """
 Main entry point of the TWI workflow.
 
-This script coordinates the complete processing pipeline from DEM selection
-and grid export to hydrological conditioning, flow routing, flow accumulation,
-slope computation, and final TWI generation. It also prepares reference layers
-used for comparison and provides two output branches: a local mode producing
-GeoTIFF files and a cloud mode returning Earth Engine layers and an interactive map.
+This script orchestrates the complete processing pipeline from DEM
+selection and grid export to hydrological conditioning, flow routing,
+flow accumulation, slope computation, and final TWI generation. It also
+prepares reference layers for validation and comparison and provides two
+output branches: a local mode producing GeoTIFF files and a cloud mode
+returning Earth Engine layers and an interactive map.
 
-The main function is `run_pipeline`, while the remaining helper functions handle
-DEM selection, reference-layer preparation, flow computation, map assembly,
-and mode-specific output processing.
+The main public function is `run_pipeline`. Supporting helper functions
+handle DEM source selection, reference-layer preparation, local flow
+computation, cloud-map construction, and mode-specific output handling.
 """
 
 from typing import Any
@@ -39,7 +40,31 @@ from scripts.visualization import plot_raster, show_map, vis_sigma
 def _select_dem_src(
     dem_source: str,
 ) -> ee.Image | ee.ImageCollection:
-    """Return the requested DEM source as an Earth Engine image or image collection."""
+    """
+    Resolve a DEM source identifier to an Earth Engine image or collection.
+
+    The function maps a predefined string identifier to a corresponding
+    Earth Engine dataset and applies band selection when needed so that
+    the result represents elevation values.
+
+    Supported sources include FABDEM, Copernicus GLO30, AW3D30, SRTM,
+    NASADEM, ASTER GDEM, CGIAR SRTM90, and MERIT DEM products.
+
+    Parameters
+    ----------
+    dem_source : str
+        DEM source identifier.
+
+    Returns
+    -------
+    ee.Image or ee.ImageCollection
+        Earth Engine object representing the selected DEM.
+
+    Raises
+    ------
+    ValueError
+        If the DEM source identifier is not supported.
+    """
     if dem_source == "FABDEM":
         return ee.ImageCollection("projects/sat-io/open-datasets/FABDEM")
     if dem_source == "GLO30":
@@ -67,7 +92,36 @@ def _build_ref_layers(
     geom: ee.Geometry,
     scale: ee.Number,
 ) -> dict[str, ee.Image]:
-    """Build reference layers aligned to the pipeline grid."""
+    """
+    Build grid-aligned reference layers for validation and comparison.
+
+    This function prepares external reference datasets (MERIT Hydro flow
+    accumulation and CTI) and reprojects them to the same grid as the DEM
+    used in the pipeline. Both full-grid and AOI-clipped versions are
+    returned.
+
+    The alignment ensures that reference layers can be directly compared
+    to locally computed outputs without additional resampling.
+
+    Parameters
+    ----------
+    dem_ee : ee.Image
+        DEM image defining the reference projection and grid.
+    geom : ee.Geometry
+        Region of interest used for clipping.
+    scale : ee.Number
+        Pixel scale used for alignment adjustments.
+
+    Returns
+    -------
+    dict of ee.Image
+        Dictionary containing grid-aligned and clipped reference layers:
+            - "merit_upa_grid"
+            - "merit_upa"
+            - "cti_grid"
+            - "cti"
+    """
+    # Reproject MERIT flow accumulation to match the DEM grid.
     merit_upa_grid = (
         ee.Image("MERIT/Hydro/v1_0_1")
         .select("upa")
@@ -76,6 +130,8 @@ def _build_ref_layers(
     )
     merit_upa = merit_upa_grid.clip(geom)
 
+    # Scale CTI values, apply a vertical shift, and align to the DEM grid.
+    # The translation compensates for dataset-specific pixel alignment.
     cti_grid = (
         ee.ImageCollection("projects/sat-io/open-datasets/HYDROGRAPHY90/flow_index/cti")
         .mosaic()
@@ -105,12 +161,40 @@ def _compute_flow(
     """
     Compute flow direction and flow accumulation for the selected routing method.
 
-    Depending on the selected option, the function runs either D8 or MFD
-    flow routing and then derives flow accumulation in square kilometres.
+    This helper function dispatches the local flow-routing workflow to
+    either the MFD implementation of Quinn et al. (1991) or the D8
+    implementation. In both cases, flow accumulation is computed from
+    the derived flow representation and converted to square kilometres.
+
+    Parameters
+    ----------
+    dem_np : np.ndarray
+        Hydrologically conditioned DEM array.
+    transform : affine.Affine
+        Affine transform describing raster georeferencing.
+    nodata_mask : np.ndarray
+        Boolean mask indicating invalid cells (True = NoData).
+    px_area_np : np.ndarray
+        Pixel-area raster in square metres on the same grid.
+    flow_method : {"mfd_quinn_1991", "d8"}
+        Flow-routing method.
+
+    Returns
+    -------
+    dict
+        Dictionary containing:
+            - "acc_km2": flow accumulation in square kilometres
+            - "timings": timing information for flow direction and accumulation
+
+    Raises
+    ------
+    ValueError
+        If the flow-routing method is not supported.
     """
     timings = {}
 
     if flow_method == "mfd_quinn_1991":
+        # Compute multi-flow routing weights.
         t0 = time.perf_counter()
         dir_out = flow_dir_mfd_quinn_1991(
             dem_np,
@@ -121,6 +205,7 @@ def _compute_flow(
         timings["flow_direction_s"] = dt
         print(f"Flow direction computed. ({dt:.2f} s)")
 
+        # Compute flow accumulation from MFD weights.
         t0 = time.perf_counter()
         acc_km2 = flow_acc(
             flow_weights=dir_out,
@@ -132,6 +217,7 @@ def _compute_flow(
         timings["flow_accumulation_s"] = dt
         print(f"Flow accumulation computed. ({dt:.2f} s)")
 
+        # Release intermediate flow-direction output before returning.
         del dir_out
         gc.collect()
 
@@ -141,6 +227,7 @@ def _compute_flow(
         }
 
     if flow_method == "d8":
+        # Compute single-flow D8 directions.
         t0 = time.perf_counter()
         dir_out = flow_dir_d8(
             dem_np,
@@ -151,6 +238,7 @@ def _compute_flow(
         timings["flow_direction_s"] = dt
         print(f"Flow direction computed. ({dt:.2f} s)")
 
+        # Compute flow accumulation from D8 direction indices.
         t0 = time.perf_counter()
         acc_km2 = flow_acc(
             dir_idx=dir_out,
@@ -162,6 +250,7 @@ def _compute_flow(
         timings["flow_accumulation_s"] = dt
         print(f"Flow accumulation computed. ({dt:.2f} s)")
 
+        # Release intermediate flow-direction output before returning.
         del dir_out
         gc.collect()
 
@@ -183,7 +272,36 @@ def _build_cloud_map(
     cti: ee.Image,
     twi: ee.Image,
 ):
-    """Create an interactive map for cloud-mode outputs."""
+    """
+    Build an interactive map for cloud-mode workflow outputs.
+
+    This helper function derives visualization parameters for the final
+    output layers and selected reference layers, adds them to a geemap
+    map, and centers the map on the region of interest.
+
+    Parameters
+    ----------
+    geom : ee.Geometry
+        Region of interest used for map centering and visualization statistics.
+    scale : ee.Number
+        Pixel scale used when deriving visualization stretches.
+    slope_ee : ee.Image
+        Slope layer.
+    acc_km2_ee : ee.Image
+        Flow-accumulation layer in square kilometres.
+    merit_upa : ee.Image
+        Reference MERIT Hydro flow-accumulation layer.
+    cti : ee.Image
+        Reference Hydrography90m CTI layer.
+    twi : ee.Image
+        Final Topographic Wetness Index layer.
+
+    Returns
+    -------
+    geemap.Map
+        Interactive map containing the final and reference layers.
+    """
+    # Build visualization stretches for final outputs and reference layers.
     vis_twi = vis_sigma(
         twi,
         "TWI",
@@ -228,6 +346,7 @@ def _build_cloud_map(
         ],
     )
 
+    # Assemble the interactive map and center it on the AOI.
     map_obj = show_map(
         [
             (slope_ee, vis_slope, "Slope (°)"),
@@ -265,8 +384,8 @@ def _run_cloud(
     Run the cloud output branch of the workflow.
 
     This function uploads the locally computed flow-accumulation raster
-    to Earth Engine, computes TWI in cloud mode, and prepares the final
-    interactive map output.
+    back to Earth Engine, computes TWI in cloud mode, and prepares the
+    final interactive map output together with reference layers.
 
     The procedure consists of the following steps:
 
@@ -282,11 +401,15 @@ def _run_cloud(
     Returns
     -------
     dict
-        Dictionary containing Earth Engine outputs and map object.
+        Dictionary containing cloud-mode Earth Engine outputs, reference
+        layers, interactive map object, geometry metadata, cell counts,
+        and timing information.
     """
     # ---------------------------------------------------------------------
     # Step 0: Upload flow accumulation raster to Earth Engine
     # ---------------------------------------------------------------------
+    # Upload the locally computed flow-accumulation raster back to
+    # Earth Engine so that subsequent cloud-side processing can continue.
     acc_km2_res = np_to_ee(
         acc_km2,
         transform=transform,
@@ -300,6 +423,8 @@ def _run_cloud(
         nodata_value=-9999.0,
     )
     acc_km2_ee_full = acc_km2_res["image"]
+
+    # Release local accumulation arrays and temporary upload metadata.
     del acc_km2
     del acc_km2_res
     gc.collect()
@@ -333,7 +458,6 @@ def _run_cloud(
         "mode": "cloud",
         "slope": slope_ee,
         "flow_accumulation_km2": acc_km2_ee,
-        "flow_accumulation_km2_full": acc_km2_ee_full,
         "MERIT_flow_accumulation_upa": ref_layers["merit_upa"],
         "twi": twi,
         "cti_Hydrography90m": ref_layers["cti"],
@@ -398,10 +522,12 @@ def _run_local(
     Returns
     -------
     dict
-        Dictionary containing paths to local output rasters and metadata.
+        Dictionary containing local output raster paths, reference layers,
+        geometry metadata, export diagnostics, cell counts, and timing
+        information.
     """
     # ---------------------------------------------------------------------
-    # Step 0: Prepare local output paths
+    # Step 0: Prepare output directory structure
     # ---------------------------------------------------------------------
     out_dir = output_dir
     os.makedirs(out_dir, exist_ok=True)
@@ -424,6 +550,8 @@ def _run_local(
     # ---------------------------------------------------------------------
     # Step 1: Export slope raster from Earth Engine and read it locally
     # ---------------------------------------------------------------------
+    # Export the slope raster on the shared workflow grid and load it
+    # as a local NumPy array for subsequent TWI computation.
     slope_export = ee_to_tif(
         slope_grid_ee,
         out_path=slope_tif_path,
@@ -455,6 +583,7 @@ def _run_local(
     timings["twi_s"] = dt
     print(f"TWI computed. ({dt:.2f} s)")
 
+    # Release intermediate local arrays before the next processing step.
     del slope_np
     gc.collect()
 
@@ -490,6 +619,8 @@ def _run_local(
     # ---------------------------------------------------------------------
     # Step 4: Clip rasters to the target geometry
     # ---------------------------------------------------------------------
+    # Clip local rasters to the final AOI after any accumulation buffering
+    # used in earlier workflow steps.
     geom_wgs84 = geom.getInfo()
 
     dem_clip_tif = clip_tif(
@@ -520,6 +651,8 @@ def _run_local(
     # ---------------------------------------------------------------------
     # Step 5: Export reference rasters
     # ---------------------------------------------------------------------
+    # Export grid-aligned reference rasters for later comparison with
+    # the locally computed outputs.
     merit_upa_export = ee_to_tif(
         img=ref_layers["merit_upa_grid"],
         out_path=merit_upa_tif_path,
@@ -658,6 +791,8 @@ def run_pipeline(
     if geometry is None:
         raise ValueError("Missing required parameter: geometry")
 
+    # Use a buffered accumulation geometry when provided; otherwise
+    # compute accumulation directly on the final AOI.
     geom = geometry
     geom_acc = accum_geometry if accum_geometry is not None else geom
     aoi_area_ha = float(geom.area(maxError=1).divide(10000).getInfo())
@@ -673,6 +808,8 @@ def run_pipeline(
     # ---------------------------------------------------------------------
     dem_src = _select_dem_src(dem_source)
 
+    # Export the DEM and pixel-area rasters on the shared grid used by
+    # subsequent local processing steps.
     grid = export_dem_grid(
         src=dem_src,
         region_geom=geom_acc,
@@ -693,7 +830,6 @@ def run_pipeline(
     cell_count_total = int(dem_np.size)
     cell_count_valid = int((~nodata_mask).sum())
     cell_count_nodata = int(nodata_mask.sum())
-    total_area_ha = float(px_area_np[~nodata_mask].sum() / 10000.0)
 
     # ---------------------------------------------------------------------
     # Step 2: Build grid-aligned reference layers
@@ -717,6 +853,7 @@ def run_pipeline(
     timings["depression_filling_s"] = dt
     print(f"Depression filling completed. ({dt:.2f} s)")
 
+    # Release intermediate arrays before the next memory-intensive step.
     del dem_np
     gc.collect()
 
@@ -734,6 +871,7 @@ def run_pipeline(
     timings["flat_resolution_s"] = dt
     print(f"Flat resolution completed. ({dt:.2f} s)")
 
+    # Release intermediate arrays before the next memory-intensive step.
     del dem_fill_np
     gc.collect()
 
@@ -750,6 +888,7 @@ def run_pipeline(
     acc_km2 = flow_res["acc_km2"]
     timings.update(flow_res["timings"])
 
+    # Release intermediate arrays before the next memory-intensive step.
     del dem_res_np
     del px_area_np
     gc.collect()
@@ -767,6 +906,9 @@ def run_pipeline(
     # ---------------------------------------------------------------------
     # Step 6: Compute TWI and generate outputs (cloud or local mode)
     # ---------------------------------------------------------------------
+    # Continue either in cloud mode (upload locally computed flow accumulation
+    # back to Earth Engine, compute TWI there, and prepare visualization layers)
+    # or in local mode (compute TWI locally and write outputs to GeoTIFF files).
     if use_bucket:
         result = _run_cloud(
             project_id=project_id,
@@ -819,8 +961,3 @@ def run_pipeline(
     result["timings"] = timings
 
     return result
-
-
-if __name__ == "__main__":
-    _ = run_pipeline()
-    
