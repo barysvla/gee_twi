@@ -378,40 +378,43 @@ def ee_to_tif(
     remove_tile_dirs: bool = False,
 ) -> Dict[str, Any]:
     """
-    Export an Earth Engine image to a grid-aligned GeoTIFF.
-
-    This function first attempts a standard direct Earth Engine export.
-    If the request exceeds the response-size limit, it automatically
-    switches to tiled export, normalizes each downloaded tile to the
-    expected raster window, and assembles the final GeoTIFF locally.
-
+    Export an Earth Engine image to a grid-aligned GeoTIFF with automatic fallback.
+    
+    This function provides a robust export mechanism from Earth Engine to a
+    local GeoTIFF. It first attempts a standard direct export. If the request
+    exceeds the Earth Engine response-size limit, it automatically switches
+    to tiled export, reconstructs the full raster grid, and assembles the
+    final GeoTIFF locally.
+    
+    The function is designed to ensure reliable export of large rasters by
+    combining direct export, adaptive tiling, and retry logic.
+    
     The procedure consists of the following steps:
-
+    
     Step 0
-        Validate the export mode and input options.
-
+        Validate export mode and input options.
+    
     Step 1
         Attempt a standard direct export.
-
+    
     Step 2
-        If the direct export exceeds the size limit, derive the full
-        raster transform and shape from the grid definition.
-
+        If the direct export exceeds the size limit, reconstruct the full
+        raster grid (transform and dimensions) from the grid definition.
+    
     Step 3
-        Estimate a suitable tile grid from raster dimensions and a
-        conservative per-tile byte budget.
-
+        Estimate an initial tile grid based on raster size and a conservative
+        byte budget.
+    
     Step 4
         Export the image by tiles and assemble the final GeoTIFF.
-
+    
     Step 5
         If tiled export fails, refine the tile grid and retry until the
         maximum number of attempts is reached.
-
+    
     Step 6
-        Build the final export diagnostics or raise an error if all
-        export attempts fail.
-
+        Return export diagnostics or raise an error if all attempts fail.
+    
     Parameters
     ----------
     img : ee.Image
@@ -437,7 +440,7 @@ def ee_to_tif(
     remove_tile_dirs : bool, default=False
         If True, remove temporary tiled-export directories after a
         successful tiled export.
-
+    
     Returns
     -------
     result : dict
@@ -455,6 +458,7 @@ def ee_to_tif(
     # ---------------------------------------------------------------------
     # Step 1: Attempt a standard direct export
     # ---------------------------------------------------------------------
+    # Attempt a standard direct Earth Engine export (single request).
     if not force_tiled:
         try:
             _ee_to_tif_standard(
@@ -483,11 +487,14 @@ def ee_to_tif(
     # ---------------------------------------------------------------------
     # Step 2: Derive full raster transform and shape from the grid
     # ---------------------------------------------------------------------
+    # Reconstruct the full raster grid (transform and dimensions)
+    # required for tiled export.
     full_transform, full_width, full_height = _grid_transform_and_shape(grid)
 
     # ---------------------------------------------------------------------
     # Step 3: Estimate an initial tile grid
     # ---------------------------------------------------------------------
+    # Estimate an initial tile grid that satisfies memory constraints.
     plan = _suggest_tile_grid(
         width=full_width,
         height=full_height,
@@ -509,8 +516,10 @@ def ee_to_tif(
     attempt_history: list[dict[str, Any]] = []
 
     # ---------------------------------------------------------------------
-    # Step 4-5: Export by tiles, assemble, and retry if needed
+    # Step 4-5: Export tiles, assemble the raster, and refine if needed
     # ---------------------------------------------------------------------
+    # Export the image in tiles, assemble the final GeoTIFF, and
+    # iteratively refine the tile grid if export fails.
     for attempt in range(1, _TILE_MAX_RETRIES + 1):
         attempt_dir = os.path.join(tmp_dir, f"attempt_{attempt}_{n_rows}x{n_cols}")
         os.makedirs(attempt_dir, exist_ok=True)
@@ -599,21 +608,82 @@ def _ee_to_tif_standard(
     unmask_value: float | None = None,
     quiet: bool = True,
 ) -> str:
-    """Export an image with a single direct Earth Engine HTTP request."""
+    """
+    Export an Earth Engine image to GeoTIFF using a single direct request.
+
+    This internal function performs a standard Earth Engine export in a
+    single HTTP request using a predefined grid definition. It prepares
+    export arguments from the grid metadata, optionally applies unmasking,
+    executes the export, and interprets captured log output to detect
+    response-size failures and other export errors.
+
+    The procedure consists of the following steps:
+
+    Step 0
+        Validate the grid definition and derive export parameters.
+
+    Step 1
+        Prepare the output directory and optional quiet logging mode.
+
+    Step 2
+        Build the export image and execute the direct export request.
+
+    Step 3
+        Detect successful output creation or interpret captured log output.
+
+    Step 4
+        Raise a specialized export error when the request exceeds the
+        Earth Engine response-size limit or fails for another reason.
+
+    Step 5
+        Restore original logger levels.
+
+    Parameters
+    ----------
+    img : ee.Image
+        Earth Engine image to export.
+    out_path : str
+        Output GeoTIFF path.
+    grid : dict
+        Grid definition containing projection metadata and export region.
+    unmask_value : float, optional
+        Value used in `img.unmask(unmask_value)` before export.
+    quiet : bool, default=True
+        If True, suppress verbose logging and capture export output.
+
+    Returns
+    -------
+    str
+        Path to the created GeoTIFF.
+
+    Raises
+    ------
+    KeyError
+        If the required grid definition is incomplete.
+    EarthEngineSizeLimitError
+        If the direct export fails due to the Earth Engine response-size limit.
+    EarthEngineExportError
+        If the export fails for another reason.
+    """
+    # ---------------------------------------------------------------------
+    # Step 0: Validate grid definition and derive export parameters
+    # ---------------------------------------------------------------------
     for key in ("projection_info", "region_used"):
         if key not in grid:
             raise KeyError(f"grid is missing required key: '{key}'")
-
+    
     proj_info = grid["projection_info"]
     crs_str = proj_info["crs"]
     crs_transform = proj_info.get("transform", None)
     region = grid["region_used"]
-
+    
     export_kwargs: dict[str, Any] = {
         "region": region,
         "file_per_band": False,
     }
-
+    
+    # Use either the full affine transform or a scale-based export
+    # depending on how the grid definition is represented.
     if crs_transform is not None:
         export_kwargs["crs"] = crs_str
         export_kwargs["crs_transform"] = crs_transform
@@ -626,25 +696,35 @@ def _ee_to_tif_standard(
         export_kwargs["crs"] = crs_str
         export_kwargs["scale"] = float(scale_m)
 
+    # ---------------------------------------------------------------------
+    # Step 1: Prepare output path and optional quiet logging
+    # ---------------------------------------------------------------------
     out_dir = os.path.dirname(out_path)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
-
+    
+    # Preserve logger levels so they can be restored after export.
     previous_levels: dict[str, int] = {}
     if quiet:
         for name in ("google", "googleapiclient", "geemap"):
             logger = logging.getLogger(name)
             previous_levels[name] = logger.level
             logger.setLevel(logging.ERROR)
-
+    
+    # ---------------------------------------------------------------------
+    # Step 2: Build export image and execute direct export
+    # ---------------------------------------------------------------------
     try:
+        # Materialize masked pixels only when an explicit unmask value is requested.
         export_img = img.unmask(unmask_value) if unmask_value is not None else img
 
+        # Remove any stale file so successful export is detected unambiguously.
         if os.path.exists(out_path):
             os.remove(out_path)
-
+    
         log_text = ""
         if quiet:
+            # Capture geemap / EE output so it can be inspected if export fails.
             sink = io.StringIO()
             with contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
                 geemap.ee_export_image(export_img, filename=out_path, **export_kwargs)
@@ -652,12 +732,16 @@ def _ee_to_tif_standard(
         else:
             geemap.ee_export_image(export_img, filename=out_path, **export_kwargs)
 
+        # ---------------------------------------------------------------------
+        # Step 3: Detect successful output creation or inspect export logs
+        # ---------------------------------------------------------------------
         if os.path.exists(out_path):
             return out_path
-
+    
         reported_total = None
         reported_limit = None
 
+        # Try to extract the reported request size and limit from EE/geemap logs.
         match = re.search(
             (
                 r"Total request size\s*\((\d+)\s*bytes\)\s*"
@@ -676,6 +760,11 @@ def _ee_to_tif_standard(
             if match:
                 reported_limit = int(match.group(1))
 
+        # ---------------------------------------------------------------------
+        # Step 4: Raise a specialized export error
+        # ---------------------------------------------------------------------
+        # Construct an informative error message based on the captured
+        # Earth Engine / geemap output.
         msg = f"Earth Engine export failed: '{out_path}' was not created.\n"
 
         if reported_total is not None and reported_limit is not None:
@@ -699,6 +788,9 @@ def _ee_to_tif_standard(
         raise EarthEngineExportError(msg)
 
     finally:
+        # -----------------------------------------------------------------
+        # Step 5: Restore original logger levels
+        # -----------------------------------------------------------------
         if quiet:
             for name, level in previous_levels.items():
                 logging.getLogger(name).setLevel(level)
