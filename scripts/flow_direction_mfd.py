@@ -3,11 +3,14 @@ from __future__ import annotations
 """
 MFD flow-direction computation for DEM-based flow routing.
 
-This script computes flow-routing weights in a raster DEM using the
-multiple-flow-direction (MFD) approach of Quinn et al. (1991), where
-flow from each cell can be distributed among several downslope neighbours.
-It is used after hydrological conditioning to define distributed flow
-routing for subsequent flow accumulation.
+The function `flow_dir_mfd_quinn_1991` computes multi-flow routing
+weights in a raster DEM using the approach of Quinn et al. (1991),
+where flow from each cell can be distributed among multiple downslope
+neighbours. It is intended for use after hydrological conditioning as
+input for subsequent flow-accumulation calculation.
+
+Auxiliary functions provide metric step-length computation for geographic
+coordinates and support consistent evaluation of local slopes.
 """
 
 from typing import Tuple
