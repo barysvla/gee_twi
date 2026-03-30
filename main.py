@@ -16,6 +16,7 @@ and mode-specific output processing.
 
 from typing import Any
 from datetime import datetime
+import time
 
 import os
 
@@ -107,45 +108,67 @@ def _compute_flow(
     Depending on the selected option, the function runs either D8 or MFD
     flow routing and then derives flow accumulation in square kilometres.
     """
+    timings = {}
+
     if flow_method == "mfd_quinn_1991":
+        t0 = time.perf_counter()
         dir_out = flow_dir_mfd_quinn_1991(
             dem_np,
             transform,
             nodata_mask=nodata_mask,
         )
-        print("Flow direction computed.")
+        dt = time.perf_counter() - t0
+        timings["flow_direction_s"] = dt
+        print(f"Flow direction computed. ({dt:.2f} s)")
 
+        t0 = time.perf_counter()
         acc_km2 = flow_acc(
             flow_weights=dir_out,
             nodata_mask=nodata_mask,
             pixel_area_m2=px_area_np,
             out="km2",
         )
-        print("Flow accumulation computed.")
+        dt = time.perf_counter() - t0
+        timings["flow_accumulation_s"] = dt
+        print(f"Flow accumulation computed. ({dt:.2f} s)")
 
         del dir_out
         gc.collect()
-        return acc_km2
+
+        return {
+            "acc_km2": acc_km2,
+            "timings": timings,
+        }
 
     if flow_method == "d8":
+        t0 = time.perf_counter()
         dir_out = flow_dir_d8(
             dem_np,
             transform,
             nodata_mask=nodata_mask,
         )
-        print("Flow direction computed.")
+        dt = time.perf_counter() - t0
+        timings["flow_direction_s"] = dt
+        print(f"Flow direction computed. ({dt:.2f} s)")
 
+        t0 = time.perf_counter()
         acc_km2 = flow_acc(
             dir_idx=dir_out,
             nodata_mask=nodata_mask,
             pixel_area_m2=px_area_np,
             out="km2",
         )
-        print("Flow accumulation computed.")
+        dt = time.perf_counter() - t0
+        timings["flow_accumulation_s"] = dt
+        print(f"Flow accumulation computed. ({dt:.2f} s)")
 
         del dir_out
         gc.collect()
-        return acc_km2
+
+        return {
+            "acc_km2": acc_km2,
+            "timings": timings,
+        }
 
     raise ValueError(f"Unsupported flow_method: {flow_method}")
 
@@ -233,6 +256,10 @@ def _run_cloud(
     scale: ee.Number,
     acc_km2,
     ref_layers: dict[str, ee.Image],
+    cell_count_total: int,
+    cell_count_valid: int,
+    cell_count_nodata: int,
+    timings: dict[str, float],
 ) -> dict[str, Any]:
     """
     Run the cloud output branch of the workflow.
@@ -282,8 +309,11 @@ def _run_cloud(
     # ---------------------------------------------------------------------
     # Step 1: Compute and clip TWI
     # ---------------------------------------------------------------------
+    t0 = time.perf_counter()
     twi = twi_ee(acc_km2_ee, slope_ee).clip(geom)
-    print("TWI computed.")
+    dt = time.perf_counter() - t0
+    timings["twi_s"] = dt
+    print(f"TWI computed. ({dt:.2f} s)")
 
     # ---------------------------------------------------------------------
     # Step 2: Build map and return final outputs
@@ -311,12 +341,17 @@ def _run_cloud(
         "geometry_accum": geom_acc,
         "scale": scale,
         "map": map_obj,
+        "cell_count_total": cell_count_total,
+        "cell_count_valid": cell_count_valid,
+        "cell_count_nodata": cell_count_nodata,
+        "timings": timings,
     }
 
 
 def _run_local(
     *,
     geom: ee.Geometry,
+    geom_acc: ee.Geometry,
     grid: dict[str, Any],
     output_dir: str,
     transform,
@@ -325,6 +360,10 @@ def _run_local(
     slope_grid_ee: ee.Image,
     acc_km2,
     ref_layers: dict[str, ee.Image],
+    cell_count_total: int,
+    cell_count_valid: int,
+    cell_count_nodata: int,
+    timings: dict[str, float],
 ) -> dict[str, Any]:
     """
     Run the local output branch of the workflow.
@@ -404,6 +443,7 @@ def _run_local(
     # ---------------------------------------------------------------------
     # Step 2: Compute TWI locally
     # ---------------------------------------------------------------------
+    t0 = time.perf_counter()
     twi_arr = twi_np(
         acc_np=acc_km2,
         slope_deg_np=slope_np,
@@ -411,11 +451,13 @@ def _run_local(
         nodata_mask=nodata_mask,
         out_dtype="float32",
     )
-    print("TWI computed.")
-    
+    dt = time.perf_counter() - t0
+    timings["twi_s"] = dt
+    print(f"TWI computed. ({dt:.2f} s)")
+
     del slope_np
     gc.collect()
-    
+
     # ---------------------------------------------------------------------
     # Step 3: Save local rasters
     # ---------------------------------------------------------------------
@@ -432,7 +474,7 @@ def _run_local(
 
     del acc_km2
     gc.collect()
-    
+
     twi_tif = save_tif(
         twi_arr,
         transform,
@@ -444,7 +486,7 @@ def _run_local(
 
     del twi_arr
     gc.collect()
-    
+
     # ---------------------------------------------------------------------
     # Step 4: Clip rasters to the target geometry
     # ---------------------------------------------------------------------
@@ -519,6 +561,8 @@ def _run_local(
         "MERIT_flow_accumulation_upa": merit_upa_tif,
         "twi": twi_clip_tif,
         "cti_Hydrography90m": cti_tif,
+        "geometry": geom,
+        "geometry_accum": geom_acc,
         "transform": transform,
         "crs": crs,
         "nodata_mask": nodata_mask,
@@ -527,6 +571,10 @@ def _run_local(
             "MERIT_flow_accumulation_upa": merit_upa_export,
             "cti_Hydrography90m": cti_export,
         },
+        "cell_count_total": cell_count_total,
+        "cell_count_valid": cell_count_valid,
+        "cell_count_nodata": cell_count_nodata,
+        "timings": timings,
     }
 
 
@@ -599,6 +647,9 @@ def run_pipeline(
         Dictionary containing pipeline outputs for either cloud mode or
         local mode.
     """
+    total_t0 = time.perf_counter()
+    timings: dict[str, float] = {}
+
     # ---------------------------------------------------------------------
     # Step 0: Initialize Earth Engine and validate inputs
     # ---------------------------------------------------------------------
@@ -609,6 +660,7 @@ def run_pipeline(
 
     geom = geometry
     geom_acc = accum_geometry if accum_geometry is not None else geom
+    aoi_area_ha = float(geom.area(maxError=1).divide(10000).getInfo())
 
     if output_dir is None:
         run_name = datetime.now().strftime("run_%Y%m%d_%H%M%S")
@@ -638,6 +690,11 @@ def run_pipeline(
     dem_ee = grid["ee_dem_grid"]
     scale = ee.Number(dem_ee.projection().nominalScale())
 
+    cell_count_total = int(dem_np.size)
+    cell_count_valid = int((~nodata_mask).sum())
+    cell_count_nodata = int(nodata_mask.sum())
+    total_area_ha = float(px_area_np[~nodata_mask].sum() / 10000.0)
+
     # ---------------------------------------------------------------------
     # Step 2: Build grid-aligned reference layers
     # ---------------------------------------------------------------------
@@ -650,16 +707,20 @@ def run_pipeline(
     # ---------------------------------------------------------------------
     # Step 3: Perform hydrological conditioning
     # ---------------------------------------------------------------------
+    t0 = time.perf_counter()
     dem_fill_np = fill_depressions(
         dem_np,
         seed_internal_nodata_as_outlet=True,
         return_fill_depth=False,
     )
-    print("Depression filling completed.")
+    dt = time.perf_counter() - t0
+    timings["depression_filling_s"] = dt
+    print(f"Depression filling completed. ({dt:.2f} s)")
 
     del dem_np
     gc.collect()
 
+    t0 = time.perf_counter()
     dem_res_np, _, _, _ = resolve_flats_barnes_2014(
         dem_fill_np,
         nodata=np.nan,
@@ -669,7 +730,9 @@ def run_pipeline(
         apply_to_dem="epsilon",
         epsilon=1e-5,
     )
-    print("Flat resolution completed.")
+    dt = time.perf_counter() - t0
+    timings["flat_resolution_s"] = dt
+    print(f"Flat resolution completed. ({dt:.2f} s)")
 
     del dem_fill_np
     gc.collect()
@@ -677,30 +740,35 @@ def run_pipeline(
     # ---------------------------------------------------------------------
     # Step 4: Compute flow direction and flow accumulation
     # ---------------------------------------------------------------------
-    acc_km2 = _compute_flow(
+    flow_res = _compute_flow(
         dem_np=dem_res_np,
         transform=transform,
         nodata_mask=nodata_mask,
         px_area_np=px_area_np,
         flow_method=flow_method,
     )
+    acc_km2 = flow_res["acc_km2"]
+    timings.update(flow_res["timings"])
 
     del dem_res_np
     del px_area_np
     gc.collect()
-    
+
     # ---------------------------------------------------------------------
     # Step 5: Compute slope on the aligned Earth Engine grid
     # ---------------------------------------------------------------------
+    t0 = time.perf_counter()
     slope_grid_ee = ee.Terrain.slope(dem_ee).toFloat().rename("Slope")
     slope_ee = slope_grid_ee.clip(geom)
-    print("Slope computed.")
+    dt = time.perf_counter() - t0
+    timings["slope_s"] = dt
+    print(f"Slope computed. ({dt:.2f} s)")
 
     # ---------------------------------------------------------------------
     # Step 6: Compute TWI and generate outputs (cloud or local mode)
     # ---------------------------------------------------------------------
     if use_bucket:
-        return _run_cloud(
+        result = _run_cloud(
             project_id=project_id,
             geom=geom,
             geom_acc=geom_acc,
@@ -713,20 +781,46 @@ def run_pipeline(
             scale=scale,
             acc_km2=acc_km2,
             ref_layers=ref_layers,
+            cell_count_total=cell_count_total,
+            cell_count_valid=cell_count_valid,
+            cell_count_nodata=cell_count_nodata,
+            timings=timings,
+        )
+    else:
+        result = _run_local(
+            geom=geom,
+            geom_acc=geom_acc,
+            grid=grid,
+            output_dir=output_dir,
+            transform=transform,
+            crs=crs,
+            nodata_mask=nodata_mask,
+            slope_grid_ee=slope_grid_ee,
+            acc_km2=acc_km2,
+            ref_layers=ref_layers,
+            cell_count_total=cell_count_total,
+            cell_count_valid=cell_count_valid,
+            cell_count_nodata=cell_count_nodata,
+            timings=timings,
         )
 
-    return _run_local(
-        geom=geom,
-        grid=grid,
-        output_dir=output_dir,
-        transform=transform,
-        crs=crs,
-        nodata_mask=nodata_mask,
-        slope_grid_ee=slope_grid_ee,
-        acc_km2=acc_km2,
-        ref_layers=ref_layers,
+    total_time_s = time.perf_counter() - total_t0
+    print(
+        f"Total time: {total_time_s:.2f} s, "
+        f"Processed pixels: {cell_count_valid}, "
+        f"AOI area: {aoi_area_ha:.2f} ha"
     )
+
+    result["total_time_s"] = total_time_s
+    result["aoi_area_ha"] = aoi_area_ha
+    result["cell_count_total"] = cell_count_total
+    result["cell_count_valid"] = cell_count_valid
+    result["cell_count_nodata"] = cell_count_nodata
+    result["timings"] = timings
+
+    return result
 
 
 if __name__ == "__main__":
     _ = run_pipeline()
+    
