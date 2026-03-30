@@ -825,7 +825,33 @@ def _suggest_tile_grid(
     max_tile_dim: int = _TILE_MAX_DIM,
 ) -> Dict[str, int]:
     """
-    Suggest a near-square tile grid that satisfies byte and dimension limits.
+    Estimate a tile grid for raster export under memory and size constraints.
+    
+    The function computes a near-square tiling scheme based on the estimated
+    total raster size and a safe per-tile byte budget. It ensures that each
+    tile satisfies both memory limits and maximum tile dimensions.
+    
+    Parameters
+    ----------
+    width : int
+        Raster width in pixels.
+    height : int
+        Raster height in pixels.
+    band_count : int, default=1
+        Number of raster bands.
+    bytes_per_pixel : int, default=4
+        Bytes per pixel (e.g. float32 = 4).
+    hard_limit_bytes : int
+        Maximum allowed tile size in bytes.
+    safety_factor : float
+        Fraction of the hard limit used as a safe budget.
+    max_tile_dim : int
+        Maximum allowed tile width or height.
+    
+    Returns
+    -------
+    dict
+        Dictionary containing tile grid configuration and size estimates.
     """
     max_tile_bytes = _compute_safe_tile_budget(hard_limit_bytes, safety_factor)
 
@@ -836,10 +862,12 @@ def _suggest_tile_grid(
         bytes_per_pixel=bytes_per_pixel,
     )
 
+    # Estimate the minimum number of tiles required to fit within the byte budget.
     n_tiles = max(1, math.ceil(total_bytes / max_tile_bytes))
     n_cols = math.ceil(math.sqrt(n_tiles))
     n_rows = math.ceil(n_tiles / n_cols)
 
+    # Increase tile grid density until each tile satisfies dimension limits.
     while math.ceil(width / n_cols) > max_tile_dim:
         n_cols += 1
     while math.ceil(height / n_rows) > max_tile_dim:
@@ -875,10 +903,36 @@ def _refine_tile_grid(n_cols: int, n_rows: int, mode: str = _TILE_REFINE_MODE) -
 
 def _grid_transform_and_shape(grid: dict[str, Any]) -> tuple[rasterio.Affine, int, int]:
     """
-    Derive the cropped raster transform and shape from a grid definition.
+    Derive the cropped raster transform and output shape from a grid definition.
 
-    Tiled fallback requires an explicit projection transform. Grid
-    definitions based only on scale are not supported here.
+    This internal function reconstructs the raster window implied by the
+    export region and the source affine transform. It converts the region
+    bounds to pixel coordinates, expands them to integer raster indices,
+    and returns the corresponding cropped transform, width, and height.
+
+    Tiled export requires an explicit affine transform in
+    `grid["projection_info"]["transform"]`. Grid definitions based only
+    on scale are not supported here.
+
+    Parameters
+    ----------
+    grid : dict
+        Grid definition containing projection metadata and export region.
+
+    Returns
+    -------
+    cropped_transform : rasterio.Affine
+        Affine transform of the cropped raster window.
+    width : int
+        Output raster width in pixels.
+    height : int
+        Output raster height in pixels.
+
+    Raises
+    ------
+    ValueError
+        If the grid definition does not contain an affine transform or if
+        derived raster dimensions are invalid.
     """
     proj_info = grid["projection_info"]
     crs_str = proj_info["crs"]
@@ -891,8 +945,10 @@ def _grid_transform_and_shape(grid: dict[str, Any]) -> tuple[rasterio.Affine, in
             "Grid definitions based only on scale are not supported."
         )
 
+    # Base affine transform of the full source grid.
     base_transform = rasterio.Affine(*crs_transform)
 
+    # Project the export region to the raster CRS and extract its bounding box.
     region_proj = region.bounds(maxError=1, proj=ee.Projection(crs_str))
     coords = region_proj.coordinates().getInfo()[0]
 
@@ -902,9 +958,11 @@ def _grid_transform_and_shape(grid: dict[str, Any]) -> tuple[rasterio.Affine, in
     xmin, xmax = min(xs), max(xs)
     ymin, ymax = min(ys), max(ys)
 
+    # Convert projected bounds to floating-point pixel coordinates.
     col_min_f, row_top_f = ~base_transform * (xmin, ymax)
     col_max_f, row_bottom_f = ~base_transform * (xmax, ymin)
 
+    # Small numerical tolerance to stabilize integer rounding at grid boundaries.
     tol = 1e-9
 
     col_min = int(math.floor(col_min_f + tol))
@@ -920,6 +978,7 @@ def _grid_transform_and_shape(grid: dict[str, Any]) -> tuple[rasterio.Affine, in
             f"Invalid grid dimensions derived from region: width={width}, height={height}."
         )
 
+    # Shift the base transform to the upper-left corner of the cropped window.
     cropped_transform = base_transform * rasterio.Affine.translation(col_min, row_top)
     return cropped_transform, width, height
 
