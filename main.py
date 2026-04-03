@@ -864,7 +864,6 @@ def run_pipeline(
         equal_tol=0.0,
         lower_tol=0.0,
         treat_oob_as_lower=True,
-        apply_to_dem="epsilon",
         epsilon=1e-5,
     )
     dt = time.perf_counter() - t0
