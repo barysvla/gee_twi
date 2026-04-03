@@ -5,28 +5,25 @@ Flat resolution as the second step of DEM hydrological conditioning.
 
 The function `resolve_flats_barnes_2014` resolves drainable flats in a
 DEM after depression filling using the flat-resolution procedure of
-Barnes et al. (2014). The primary output is a DEM in which drainable
-flats can be optionally modified to support subsequent flow-direction
-computation.
+Barnes et al. (2014). The output is a DEM in which the resolved flat
+ordering is encoded directly into the surface using epsilon-scaled
+increments for subsequent flow-direction computation.
 """
 
 from collections import deque
-from typing import Deque, Dict, List, Optional, Tuple
+from typing import Deque, Dict, List, Tuple
 
 import numpy as np
 
 # D8 neighbourhood offsets.
-# The order is fixed because the index is used as the encoded
-# flow-direction value:
-# 0..7 = [NE, E, SE, S, SW, W, NW, N]
+# The offsets define the 8-cell neighbourhood used for flat detection
+# and breadth-first propagation:
+# [NE, E, SE, S, SW, W, NW, N]
 NEIGHBOR_OFFSETS_8: List[Tuple[int, int]] = [
     (-1, 1), (0, 1), (1, 1), (1, 0),
     (1, -1), (0, -1), (-1, -1), (-1, 0),
 ]
 
-# Special flow-direction codes.
-NODATA_DIR: int = -1
-NOFLOW_DIR: int = -2
 
 # Queue marker separating breadth-first expansion levels.
 QUEUE_MARKER: Tuple[int, int] = (-1, -1)
@@ -52,9 +49,8 @@ def resolve_flats_barnes_2014(
     equal_tol: float = 0.0,
     lower_tol: float = 0.0,
     treat_oob_as_lower: bool = True,
-    apply_to_dem: str = "none",
     epsilon: float = 1e-5,
-) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, int]]:
+) -> Tuple[np.ndarray, np.ndarray, np.ndarray, Dict[str, int]]:
     """
     Resolve drainable flat areas in a raster DEM following Barnes et al. (2014).
     
@@ -62,15 +58,21 @@ def resolve_flats_barnes_2014(
     Lehman, and Mulla (2014) as the second step of DEM hydrological
     conditioning. It constructs an auxiliary integer mask (`flat_mask`)
     based on a superposition of two breadth-first gradients, which imposes
-    a consistent and convergent drainage pattern over drainable flats
-    without requiring iterative DEM modification.
+    a consistent and convergent drainage pattern over drainable flats.
+    
+    Relative to the reference C++/RichDEM implementation, this version encodes the
+    resolved flat ordering directly into the DEM surface using epsilon-scaled increments
+    instead of assigning flow directions within flats. The returned DEM therefore
+    contains a small artificial gradient over formerly flat areas and can be used
+    directly for subsequent flow-direction computation (e.g., D8 or MFD). It also
+    introduces configurable elevation tolerances and explicit handling of
+    raster-edge drainage.
     
     The procedure consists of the following steps:
     
     Step 0
-        Detect cells with and without a strictly lower neighbour.
-        Cells without a local downslope are marked as `NOFLOW_DIR`
-        and treated as candidates for flat areas.
+        Detect cells without a strictly lower neighbour. These cells are treated
+        as candidates for flat areas.
     
     Step 1
         Identify flat-edge cells adjacent to higher terrain (`high_edges`)
@@ -91,17 +93,9 @@ def resolve_flats_barnes_2014(
         weight to the towards-lower component.
     
     Step 4
-        Use the combined flat mask to establish a consistent internal
-        drainage ordering within labeled flats.
-    
-    Step 5
-        Optionally apply this ordering to the DEM by adding epsilon-scaled
-        increments to drainable flat cells.
-    
-    Relative to the reference C++/RichDEM implementation, this version
-    introduces configurable elevation tolerances, explicit handling of
-    raster-edge drainage, and an optional epsilon-based DEM modification.
-    
+        Apply the combined flat ordering to the DEM using epsilon-scaled
+        increments.
+
     Parameters
     ----------
     dem : np.ndarray
@@ -118,19 +112,14 @@ def resolve_flats_barnes_2014(
     treat_oob_as_lower : bool, default=True
         If True, raster-edge cells are treated as draining outward when no
         strictly lower in-bounds neighbour exists.
-    apply_to_dem : {"none", "epsilon"}, default="none"
-        Optional DEM modification mode. The standard workflow keeps the DEM
-        unchanged and uses only `flat_mask` and `flowdirs`. If set to
-        `"epsilon"`, drainable flat cells are incremented by
-        `epsilon * flat_mask`.
     epsilon : float, default=1e-5
-        Increment used when `apply_to_dem="epsilon"`.
+        Increment used to encode flat ordering into the DEM surface.
     
     Returns
     -------
     dem_out : np.ndarray
-        Output DEM with NoData preserved, optionally modified on labeled
-        drainable flats.
+        Output DEM with NoData preserved and flat areas modified to include
+        a small artificial gradient.
     flat_mask : np.ndarray
         Integer flat-resolution mask. Cells outside labeled flats are zero.
     labels : np.ndarray
@@ -177,15 +166,13 @@ def resolve_flats_barnes_2014(
         return r == 0 or c == 0 or r == n_rows - 1 or c == n_cols - 1
 
     # ---------------------------------------------------------------------
-    # Step 0: Detect cells with / without local downslope
+    # Step 0: Detect cells without local downslope
     # ---------------------------------------------------------------------
-    # For each valid cell, determine whether at least one neighbouring cell
-    # has a lower elevation. The result is stored in `flowdirs`, which serves
-    # as a simple indicator of downslope availability for subsequent steps.
-    #   - NODATA_DIR  -> invalid cell
-    #   - NOFLOW_DIR  -> no strictly lower neighbour (flat candidate)
-    #   - 0           -> at least one strictly lower neighbour exists
-    flowdirs = np.full((n_rows, n_cols), NODATA_DIR, dtype=np.int16)
+    # Identify valid cells that do not have any strictly lower neighbour.
+    # These cells are treated as flat candidates in subsequent steps,
+    # whereas cells with at least one lower neighbour are not part of the
+    # flat-resolution domain.
+    flat_candidates = np.zeros((n_rows, n_cols), dtype=bool)
     
     for r in range(n_rows):
         for c in range(n_cols):
@@ -204,7 +191,7 @@ def resolve_flats_barnes_2014(
                     has_downslope = True
                     break
     
-            flowdirs[r, c] = 0 if has_downslope else NOFLOW_DIR
+            flat_candidates[r, c] = not has_downslope
     
     
     # ---------------------------------------------------------------------
@@ -229,7 +216,7 @@ def resolve_flats_barnes_2014(
             if (
                 treat_oob_as_lower
                 and is_edge_cell(r, c)
-                and flowdirs[r, c] == NOFLOW_DIR
+                and flat_candidates[r, c]
             ):
                 low_edges.append((r, c))
     
@@ -241,8 +228,8 @@ def resolve_flats_barnes_2014(
                 # Low edge: a non-flat cell adjacent to an equal-elevation
                 # flat candidate, indicating the outlet side of a drainable flat.
                 if (
-                    flowdirs[r, c] != NOFLOW_DIR
-                    and flowdirs[nr, nc] == NOFLOW_DIR
+                    (not flat_candidates[r, c])
+                    and flat_candidates[nr, nc]
                     and is_equal(z0, dem_values[nr, nc])
                 ):
                     low_edges.append((r, c))
@@ -250,13 +237,13 @@ def resolve_flats_barnes_2014(
     
                 # High edge: a flat candidate adjacent to higher terrain.
                 # These cells seed the gradient directed away from higher ground.
-                if flowdirs[r, c] == NOFLOW_DIR and (dem_values[nr, nc] - z0) > equal_tol:
+                if flat_candidates[r, c] and (dem_values[nr, nc] - z0) > equal_tol:
                     high_edges.append((r, c))
                     break
     
     # If no low-edge cells exist, no drainable flats were identified.
-    # The DEM may contain only undrainable flats, or no flats at all, so
-    # return empty flat-resolution outputs and preserve the helper flowdirs.
+    # The DEM may contain only undrainable flats or no flats at all.
+    # Return the original DEM together with empty flat-resolution outputs.
     if len(low_edges) == 0:
         dem_out = dem_values.copy()
         dem_out[~valid] = np.nan if np.isnan(nodata) else nodata
@@ -270,9 +257,8 @@ def resolve_flats_barnes_2014(
             "n_low_edges": 0,
             "n_high_edges": int(len(high_edges)),
             "note_undrainable_flats": int(len(high_edges) > 0),
-            "apply_to_dem_mode": 0,
         }
-        return dem_out, flat_mask, labels, flowdirs, stats
+        return dem_out, flat_mask, labels, stats
     
     # Remove duplicate edge coordinates while preserving discovery order.
     low_edges = _deduplicate_queue(low_edges)
@@ -373,7 +359,7 @@ def resolve_flats_barnes_2014(
                 continue
             if labels[nr, nc] != lbl:
                 continue
-            if flowdirs[nr, nc] != NOFLOW_DIR:
+            if not flat_candidates[nr, nc]:
                 continue
     
             q.append((nr, nc))
@@ -421,75 +407,23 @@ def resolve_flats_barnes_2014(
                 continue
             if labels[nr, nc] != lbl:
                 continue
-            if flowdirs[nr, nc] != NOFLOW_DIR:
+            if not flat_candidates[nr, nc]:
                 continue
     
             q.append((nr, nc))
 
     # ---------------------------------------------------------------------
-    # Step 4: Reassign flow directions within labeled flats
+    # Step 4: Apply flat ordering to the DEM
     # ---------------------------------------------------------------------
-    # For each unresolved cell in a labeled drainable flat, assign flow
-    # towards the neighbouring cell with the lowest combined flat-mask
-    # value. This establishes a consistent internal drainage pattern
-    # across cells that initially had no local downslope direction.
-    for r in range(n_rows):
-        for c in range(n_cols):
-            if flowdirs[r, c] == NODATA_DIR:
-                continue
-            if flowdirs[r, c] != NOFLOW_DIR:
-                continue
-
-            lbl = labels[r, c]
-            if lbl == 0:
-                continue
-
-            min_mask = flat_mask[r, c]
-            best_dir: Optional[int] = None
-
-            for k, (dr, dc) in enumerate(NEIGHBOR_OFFSETS_8):
-                nr, nc = r + dr, c + dc
-                if not in_bounds(nr, nc):
-                    continue
-                if flowdirs[nr, nc] == NODATA_DIR:
-                    continue
-                if labels[nr, nc] != lbl:
-                    continue
-
-                nbr_mask = flat_mask[nr, nc]
-
-                if nbr_mask < min_mask:
-                    min_mask = nbr_mask
-                    best_dir = k
-                elif (
-                    nbr_mask == min_mask
-                    and best_dir is not None
-                    and (best_dir % 2 == 1)
-                    and (k % 2 == 0)
-                ):
-                    # In tie cases, prefer a diagonal direction to maintain
-                    # behaviour consistent with the reference implementation.
-                    best_dir = k
-
-            if best_dir is not None:
-                flowdirs[r, c] = best_dir
-
-    # ---------------------------------------------------------------------
-    # Step 5: Optional DEM modification
-    # ---------------------------------------------------------------------
-    # By default, the algorithm leaves the DEM unchanged after flat
-    # resolution. Optionally, cells belonging to labeled drainable flats
-    # can be incremented according to `flat_mask`, so that the flat
-    # ordering is explicitly reflected in the DEM surface.
+    # Encode the resolved flat ordering directly into the DEM surface by
+    # adding epsilon-scaled increments to labeled drainable flat cells.
+    # This produces a DEM with a small artificial gradient that can be used
+    # for subsequent flow-direction computation.
     dem_out = dem_values.copy()
     
-    if apply_to_dem not in ("none", "epsilon"):
-        raise ValueError('apply_to_dem must be "none" or "epsilon".')
-    
-    if apply_to_dem == "epsilon":
-        # Modify only valid cells belonging to labeled drainable flats.
-        mask = (labels > 0) & valid & (flat_mask > 0)
-        dem_out[mask] = dem_out[mask] + epsilon * flat_mask[mask]
+    # Modify only valid cells belonging to labeled drainable flats.
+    mask = (labels > 0) & valid & (flat_mask > 0)
+    dem_out[mask] = dem_out[mask] + epsilon * flat_mask[mask]
     
     # Restore the original NoData mask in the output DEM.
     dem_out[~valid] = np.nan if np.isnan(nodata) else nodata
@@ -502,7 +436,6 @@ def resolve_flats_barnes_2014(
         "n_high_edges": int(len(high_edges)),
         "removed_highedges_unlabeled": int(removed_unlabeled),
         "removed_highedges_low_dominates": int(removed_low_dominates),
-        "apply_to_dem_mode": {"none": 0, "epsilon": 1}[apply_to_dem],
     }
     
     return (
