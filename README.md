@@ -83,7 +83,7 @@ The workflow consists of several sequential steps executed in the Colab notebook
    $$
     
     where  
-    - a — total upslope contributing area derived from flow accumulation  
+    - a — total upslope contributing area derived from flow accumulation (km²)
     - β — slope (radians)
 
 9. **Visualization and export**  
