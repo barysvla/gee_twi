@@ -81,7 +81,8 @@ The workflow consists of several sequential steps executed in the Colab notebook
    $$
    \mathrm{TWI} = \ln\left(\frac{a}{\tan \beta}\right)
    $$
-    
+
+    <br>
     where  
     - $a$ — total upslope contributing area derived from flow accumulation (km²)
     - β — slope (radians)
