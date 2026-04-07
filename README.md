@@ -83,8 +83,8 @@ The workflow consists of several sequential steps executed in the Colab notebook
   $$
     
     where  
-    - $a$ — total upslope contributing area derived from flow accumulation  
-    - $\beta$ — slope (radians)
+    - a — total upslope contributing area derived from flow accumulation  
+    - β — slope (radians)
 
 8. **Visualization and export**  
    Results are visualized either in the interactive Earth Engine map or locally, and can be exported as GeoTIFF files to Google Drive or local storage.
