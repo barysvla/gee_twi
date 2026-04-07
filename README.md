@@ -65,7 +65,7 @@ The workflow consists of several sequential steps executed in the Colab notebook
    Depressions are filled using **Priority-Flood (Barnes et al., 2014a)** and flats are resolved using the method of **Barnes et al. (2014b)**.
    
 5. **Flow routing and accumulation computation**  
-   Flow routing is computed using either the **D8 (single-flow direction)** algorithm or the **multiple-flow direction (MFD)** method proposed by Quinn et al. (1991). The resulting flow distribution is then used to compute the upslope contributing area.
+   Flow routing is computed using either the **D8 (single-flow direction)** algorithm or the **MFD (multiple-flow direction )** method proposed by Quinn et al. (1991). The resulting flow distribution is then used to compute the upslope contributing area.
 
 6. **Slope computation**  
    Terrain slope is derived from the DEM using the Earth Engine function `ee.Terrain.slope`, which computes slope in degrees on the target grid.
