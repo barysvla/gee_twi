@@ -2,6 +2,15 @@
 
 Interactive workflow for computing the **Topographic Wetness Index (TWI)**
 from global DEM datasets using Google Earth Engine (GEE) and Google Colab.
+TWI is defined as:
+
+<p align="center">
+$$
+\mathrm{TWI} = \ln\left(\frac{a}{\tan \beta}\right)
+$$
+</p>
+
+where $a$ is the total upslope contributing area derived from flow accumulation (km²) and $\beta$ is slope (radians).
 
 The workflow allows the user to select an area of interest, choose the DEM 
 source and flow routing method, and export terrain-derived outputs 
@@ -75,16 +84,6 @@ After slope computation, the workflow branches into two execution modes dependin
 
 - **Cloud mode (GEE)** – TWI is computed server-side using Earth Engine  
 - **Local mode (NumPy)** – DEM-derived data are exported and TWI is computed locally in the Colab environment
-
-TWI is defined as:
-
-<p align="center">
-$$
-\mathrm{TWI} = \ln\left(\frac{a}{\tan \beta}\right)
-$$
-</p>
-
-where $a$ is the total upslope contributing area derived from flow accumulation (km²) and $\beta$ is slope (radians).
 
 9. **Visualization and export**  
 Results are visualized either in the interactive Earth Engine map or locally, and can be exported as GeoTIFF files to Google Drive or local storage.
