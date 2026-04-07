@@ -61,32 +61,32 @@ Local execution does not require billing.
 The workflow consists of several sequential steps executed in the Colab notebook:
 
 1. **Authentication and environment setup**  
-The user authenticates with GEE and provides a Cloud Project ID.  
-The notebook clones the repository and installs required Python dependencies.
+   The user authenticates with GEE and provides a Cloud Project ID.  
+   The notebook clones the repository and installs required Python dependencies.
 
 2. **Area of Interest (AOI) definition**  
-The AOI can be defined by drawing a polygon on the interactive map or by uploading a vector file (GeoJSON, GPKG, KML/KMZ, or Shapefile).
+   The AOI can be defined by drawing a polygon on the interactive map or by uploading a vector file (GeoJSON, GPKG, KML/KMZ, or Shapefile).
 
 3. **DEM selection**  
-A global DEM dataset is selected from the available sources (e.g., FABDEM, Copernicus GLO-30, MERIT DEM, SRTM).
+   A global DEM dataset is selected from the available sources (e.g., FABDEM, Copernicus GLO-30, MERIT DEM, SRTM).
 
 4. **Hydrological conditioning of DEM**  
-Depressions are filled using **Priority-Flood (Barnes et al., 2014a)** and flats are resolved using the method of **Barnes et al. (2014b)**.
+   Depressions are filled using **Priority-Flood (Barnes et al., 2014a)** and flats are resolved using the method of **Barnes et al. (2014b)**.
    
 5. **Flow routing and accumulation computation**  
-Flow routing is computed using either the **D8 (single-flow direction)** algorithm or the **MFD (multiple-flow direction )** method proposed by Quinn et al. (1991). The resulting flow distribution is then used to compute the upslope contributing area.
+   Flow routing is computed using either the **D8 (single-flow direction)** algorithm or the **MFD (multiple-flow direction )** method proposed by Quinn et al. (1991). The resulting flow distribution is then used to compute the upslope contributing area.
 
 6. **Slope computation**  
-Terrain slope is derived from the DEM using the Earth Engine function `ee.Terrain.slope`, which computes slope in degrees on the target grid.
+   Terrain slope is derived from the DEM using the Earth Engine function `ee.Terrain.slope`, which computes slope in degrees on the target grid.
 
 7. **TWI computation**  
-After slope computation, the workflow branches into two execution modes depending on the availability of an active Google Cloud billing account:
+   After slope computation, the workflow branches into two execution modes depending on the availability of an active Google Cloud billing account:
 
-  - **Cloud mode (GEE)** – TWI is computed server-side using Earth Engine  
-  - **Local mode (NumPy)** – DEM-derived data are exported and TWI is computed locally in the Colab environment
+   - **Cloud mode (GEE)** – TWI is computed server-side using Earth Engine  
+   - **Local mode (NumPy)** – DEM-derived data are exported and TWI is computed locally in the Colab environment
 
 9. **Visualization and export**  
-Results are visualized either in the interactive Earth Engine map or locally, and can be exported as GeoTIFF files to Google Drive or local storage.
+   Results are visualized either in the interactive Earth Engine map or locally, and can be exported as GeoTIFF files to Google Drive or local storage.
 
 ## Execution model
 
