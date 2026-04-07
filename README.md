@@ -52,11 +52,11 @@ Local execution does not require billing.
 The workflow consists of several sequential steps executed in the Colab notebook:
 
 1. **Authentication and environment setup**  
-   The user authenticates with GEE and provides a Cloud Project ID.  
-   The notebook clones the repository and installs required Python dependencies.
+The user authenticates with GEE and provides a Cloud Project ID.  
+The notebook clones the repository and installs required Python dependencies.
 
 2. **Area of Interest (AOI) definition**  
-   The AOI can be defined by drawing a polygon on the interactive map or by uploading a vector file (GeoJSON, GPKG, KML/KMZ, or Shapefile).
+The AOI can be defined by drawing a polygon on the interactive map or by uploading a vector file (GeoJSON, GPKG, KML/KMZ, or Shapefile).
 
 3. **DEM selection**  
    A global DEM dataset is selected from the available sources (e.g., FABDEM, Copernicus GLO-30, MERIT DEM, SRTM).
