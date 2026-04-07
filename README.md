@@ -82,8 +82,8 @@ Terrain slope is derived from the DEM using the Earth Engine function `ee.Terrai
 7. **TWI computation**  
 After slope computation, the workflow branches into two execution modes depending on the availability of an active Google Cloud billing account:
 
-- **Cloud mode (GEE)** – TWI is computed server-side using Earth Engine  
-- **Local mode (NumPy)** – DEM-derived data are exported and TWI is computed locally in the Colab environment
+  - **Cloud mode (GEE)** – TWI is computed server-side using Earth Engine  
+  - **Local mode (NumPy)** – DEM-derived data are exported and TWI is computed locally in the Colab environment
 
 9. **Visualization and export**  
 Results are visualized either in the interactive Earth Engine map or locally, and can be exported as GeoTIFF files to Google Drive or local storage.
