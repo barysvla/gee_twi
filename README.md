@@ -76,15 +76,15 @@ The workflow consists of several sequential steps executed in the Colab notebook
    - **Cloud mode (GEE)** – TWI is computed server-side using Earth Engine  
    - **Local mode (NumPy)** – DEM-derived data are exported and TWI is computed locally in the Colab environment
 
-  The Topographic Wetness Index is defined as:
-  
-  $$
-  \mathrm{TWI} = \ln\left(\frac{a}{\tan \beta}\right)
-  $$
-  
-  where  
-  - \( a \) — total upslope contributing area derived from flow accumulation  
-  - \( \beta \) — slope (radians)
+    The Topographic Wetness Index is defined as:
+    
+    $$
+    \mathrm{TWI} = \ln\left(\frac{a}{\tan \beta}\right)
+    $$
+    
+    where  
+    - $a$ — total upslope contributing area derived from flow accumulation  
+    - $\beta$ — slope (radians)
 
 8. **Visualization and export**  
    Results are visualized either in the interactive Earth Engine map or locally, and can be exported as GeoTIFF files to Google Drive or local storage.
