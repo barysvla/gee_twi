@@ -84,7 +84,7 @@ $$
 $$
 </p>
 
-   where $a$ is the total upslope contributing area derived from flow accumulation (km²) and $\beta$ is slope (radians).
+     where $a$ is the total upslope contributing area derived from flow accumulation (km²) and $\beta$ is slope (radians).
 
 9. **Visualization and export**  
    Results are visualized either in the interactive Earth Engine map or locally, and can be exported as GeoTIFF files to Google Drive or local storage.
