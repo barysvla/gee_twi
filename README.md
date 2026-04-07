@@ -26,7 +26,7 @@ The workflow combines server-side processing in Google Earth Engine with local c
 
 DEM conditioning, flow routing, and flow accumulation are performed locally using NumPy, while terrain slope is derived in Earth Engine.
 
-The workflow branches into cloud or local execution only at the TWI computation stage.
+The workflow branches only at the TWI computation stage: TWI is computed either in Earth Engine (cloud mode) or locally in Colab (NumPy).
 
 ## Project structure
 
