@@ -118,3 +118,10 @@ Barták, V. (2008). Algoritmy pro zpracování digitálních modelů terénu s a
 O'Callaghan, J. F., & Mark, D. M. (1984). The extraction of drainage networks from digital elevation data. *Computer Vision, Graphics, and Image Processing*, 28(3), 323–344.
 
 Quinn, P., Beven, K., Chevallier, P., & Planchon, O. (1991). The prediction of hillslope flow paths for distributed hydrological modelling using digital terrain models. *Hydrological Processes*, 5(1), 59–79.
+
+## Author
+Bc. Vladislav Baryshev  
+Faculty of Environmental Sciences, Czech University of Life Sciences Prague (CZU)
+
+This tool was developed as part of the Master's thesis  
+“Cloud-native implementation of the Topographic Wetness Index calculation”.
