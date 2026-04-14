@@ -4,11 +4,9 @@ Interactive workflow for computing the **Topographic Wetness Index (TWI)**
 from global DEM datasets using Google Earth Engine (GEE) and Google Colab.
 TWI is defined as:
 
-<p align="center">
 $$
 \mathrm{TWI} = \ln\left(\frac{a}{\tan \beta}\right)
 $$
-</p>
 
 where $a$ is the total upslope contributing area derived from flow accumulation (km²) and $\beta$ is slope (radians).
 
