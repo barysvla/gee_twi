@@ -1,6 +1,6 @@
 # TWI Calculator (Google Earth Engine + Colab)
 
-Interactive workflow for computing the **Topographic Wetness Index (TWI)**
+Interactive tool and workflow for computing the **Topographic Wetness Index (TWI)**
 from global DEM datasets using Google Earth Engine (GEE) and Google Colab.
 TWI is defined as:
 
