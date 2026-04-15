@@ -118,7 +118,7 @@ O'Callaghan, J. F., & Mark, D. M. (1984). The extraction of drainage networks fr
 Quinn, P., Beven, K., Chevallier, P., & Planchon, O. (1991). The prediction of hillslope flow paths for distributed hydrological modelling using digital terrain models. *Hydrological Processes*, 5(1), 59–79.
 
 ## Author
-Bc. Vladislav Baryshev  
+Vladislav Baryshev  
 Faculty of Environmental Sciences, Czech University of Life Sciences Prague (CZU)
 
 This tool was developed as part of the Master's thesis  
